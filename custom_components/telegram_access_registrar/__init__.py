@@ -21,6 +21,7 @@ from .const import (
     SERVICE_APPROVE,
     SERVICE_LIST_REQUESTS,
     SERVICE_ISSUE_AKUVOX_KEY,
+    SERVICE_SET_HOME_CONTROL,
     SERVICE_REJECT,
     SERVICE_SEND_MESSAGE,
     STORAGE_KEY_PREFIX,
@@ -127,11 +128,16 @@ def _async_register_services(hass: HomeAssistant) -> None:
         await runtime["api"].async_send_photo(recipient["chat_id"], await client.async_get_panel_temp_key_qr(str(key["key_id"])), "QR-код доступа: вход и пассажирский лифт")
         return {"key_id": str(key["key_id"]), "pin": pin, "expires_at": end.isoformat()}
 
+    async def set_home_control(call: ServiceCall) -> dict[str, Any]:
+        user = await _runtime(hass)["registry"].async_set_home_control(call.data["chat_id"], call.data["allowed"])
+        return {"updated": user is not None, "recipient": user}
+
     hass.services.async_register(DOMAIN, SERVICE_APPROVE, approve, vol.Schema({vol.Required("chat_id"): vol.Coerce(int)}), supports_response="optional")
     hass.services.async_register(DOMAIN, SERVICE_REJECT, reject, vol.Schema({vol.Required("chat_id"): vol.Coerce(int)}), supports_response="optional")
     hass.services.async_register(DOMAIN, SERVICE_LIST_REQUESTS, list_requests, supports_response="only")
     hass.services.async_register(DOMAIN, SERVICE_SEND_MESSAGE, send_message, vol.Schema({vol.Required("username"): str, vol.Required("message"): str}))
     hass.services.async_register(DOMAIN, SERVICE_ISSUE_AKUVOX_KEY, issue_akuvox_key, vol.Schema({vol.Required("username"): str, vol.Required("relay_names"): [str], vol.Optional("duration_hours", default=48): vol.All(vol.Coerce(int), vol.Range(min=1, max=168)), vol.Optional("uses", default=100): vol.All(vol.Coerce(int), vol.Range(min=1, max=100000))}), supports_response="only")
+    hass.services.async_register(DOMAIN, SERVICE_SET_HOME_CONTROL, set_home_control, vol.Schema({vol.Required("chat_id"): vol.Coerce(int), vol.Required("allowed"): bool}), supports_response="optional")
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -139,6 +145,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     runtime = hass.data[DOMAIN].pop(entry.entry_id)
     await runtime["coordinator"].async_stop()
     if not hass.data[DOMAIN]:
-        for service in (SERVICE_APPROVE, SERVICE_REJECT, SERVICE_LIST_REQUESTS, SERVICE_SEND_MESSAGE, SERVICE_ISSUE_AKUVOX_KEY):
+        for service in (SERVICE_APPROVE, SERVICE_REJECT, SERVICE_LIST_REQUESTS, SERVICE_SEND_MESSAGE, SERVICE_ISSUE_AKUVOX_KEY, SERVICE_SET_HOME_CONTROL):
             hass.services.async_remove(DOMAIN, service)
     return True

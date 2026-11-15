@@ -38,7 +38,7 @@ class AccessRegistry:
         display_name = " ".join(
             value for value in (str(user.get("first_name", "")), str(user.get("last_name", ""))) if value
         ).strip()
-        return {"chat_id": chat_id, "username": username, "display_name": display_name}
+        return {"chat_id": chat_id, "username": username, "display_name": display_name, "can_control_home": False}
 
     async def async_request(self, chat: dict[str, Any], user: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         """Record an unknown requester once; return whether an admin must be notified."""
@@ -74,6 +74,14 @@ class AccessRegistry:
     def get_approved(self, chat_id: int) -> dict[str, Any] | None:
         item = self._data["approved"].get(str(chat_id))
         return deepcopy(item) if item else None
+
+    async def async_set_home_control(self, chat_id: int, allowed: bool) -> dict[str, Any] | None:
+        item = self._data["approved"].get(str(chat_id))
+        if item is None:
+            return None
+        item["can_control_home"] = allowed
+        await self._save()
+        return deepcopy(item)
 
     def snapshot(self) -> dict[str, list[dict[str, Any]]]:
         return {
