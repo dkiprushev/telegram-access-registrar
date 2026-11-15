@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title>Telegram Access Registrar</title>
+  <defs>
+    <linearGradient id="background" x1="56" y1="40" x2="456" y2="472" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#229ED9"/>
+      <stop offset="1" stop-color="#1469A5"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#background)"/>
+  <path fill="#fff" d="M399 113 105 227c-20 8-19 36 2 42l75 24 29 88c6 19 31 23 43 7l42-55 73 53c15 11 37 2 41-17l48-233c5-21-16-34-35-23Zm-82 84-116 104-8 47-18-56 142-95Z"/>
+  <path fill="#0D3D61" d="M201 301 317 197l-142 95 18 56 8-47Z" opacity=".45"/>
+  <rect x="302" y="300" width="111" height="105" rx="20" fill="#fff"/>
+  <path fill="#1469A5" d="M324 348h67v39h-67z"/>
+  <path fill="#1469A5" d="M335 348v-18a23 23 0 0 1 46 0v18h-13v-18a10 10 0 0 0-20 0v18z"/>
+</svg>
