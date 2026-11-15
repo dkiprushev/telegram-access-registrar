@@ -75,6 +75,12 @@ class RegistrarCoordinator:
             return
         chat_id = int(chat["id"])
         command, argument = self._command(str(message.get("text", "")))
+        if command == "/whoami":
+            await self._api.async_send_message(
+                chat_id,
+                f"Telegram User ID: {user.get('id')}\nChat ID: {chat_id}",
+            )
+            return
         if command == COMMAND_START:
             needs_review, identity = await self._registry.async_request(chat, user)
             if needs_review:
