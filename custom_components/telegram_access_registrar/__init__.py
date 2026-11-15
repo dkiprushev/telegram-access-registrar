@@ -35,11 +35,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}.{entry.entry_id}")
     registry = AccessRegistry(store)
     api = TelegramApi(async_get_clientsession(hass), entry.data[CONF_BOT_TOKEN])
+    def request_access(data: dict[str, Any]) -> None:
+        """Make /access immediately issue the deliberately fixed guest key."""
+        recipient = data.get("recipient", {})
+        username = recipient.get("username") if isinstance(recipient, dict) else None
+        if not username:
+            return
+        hass.async_create_task(
+            hass.services.async_call(
+                DOMAIN,
+                SERVICE_ISSUE_AKUVOX_KEY,
+                {
+                    "username": username,
+                    "relay_names": ["Вхід 25-Е", "Ліфт пасажирський 25-Е"],
+                    "duration_hours": 48,
+                },
+                blocking=True,
+            )
+        )
+
     coordinator = RegistrarCoordinator(
         api,
         registry,
         int(entry.data[CONF_ADMIN_CHAT_ID]),
-        lambda data: hass.bus.async_fire(EVENT_ACCESS_REQUESTED, data),
+        lambda data: (hass.bus.async_fire(EVENT_ACCESS_REQUESTED, data), request_access(data)),
     )
     await coordinator.async_start()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
