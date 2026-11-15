@@ -12,6 +12,7 @@ SERVICE_SEND_MESSAGE = "send_message"
 SERVICE_LIST_REQUESTS = "list_requests"
 SERVICE_ISSUE_AKUVOX_KEY = "issue_akuvox_key"
 SERVICE_SET_HOME_CONTROL = "set_home_control"
+SERVICE_SET_ADMIN_CHAT_ID = "set_admin_chat_id"
 
 EVENT_ACCESS_REQUESTED = f"{DOMAIN}_access_requested"
 STORAGE_VERSION = 1
