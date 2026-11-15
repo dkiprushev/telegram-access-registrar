@@ -124,7 +124,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
         key = next((item for item in reversed(keys) if item.get("description") == description), None)
         if not key or not key.get("key_id"):
             raise ValueError("Akuvox created the key but did not return it")
-        pin = next((str(key[k]) for k in ("pin", "code", "password", "KeyCode") if key.get(k)), "see QR code")
+        pin = next((str(key[k]) for k in ("key_code", "TmpKey", "pin", "code", "password", "KeyCode") if key.get(k)), "see QR code")
         await runtime["api"].async_send_message(recipient["chat_id"], f"Доступ активен до {end:%d.%m %H:%M}. PIN: {pin}")
         await runtime["api"].async_send_photo(recipient["chat_id"], await client.async_get_panel_temp_key_qr(str(key["key_id"])), "QR-код доступа: вход и пассажирский лифт")
         return {"key_id": str(key["key_id"]), "pin": pin, "expires_at": end.isoformat()}
