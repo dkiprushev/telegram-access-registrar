@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Telegram Access Registrar",
-        "description": "Use a dedicated bot token. The admin must already have started this bot.",
+        "description": "Use the existing SmartHouse bot token. Before setup is finished, remove the core Telegram bot integration that polls this token. The administrator must already have started the bot.",
         "data": {
           "bot_token": "Bot token",
           "admin_chat_id": "Administrator chat ID"
