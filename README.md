@@ -1,5 +1,12 @@
 # Telegram Access Registrar
 
+## Akuvox temporary keys
+
+The `telegram_access_registrar.issue_akuvox_key` action issues a 48-hour key and
+sends both the PIN and QR image to an approved Telegram user.  It intentionally
+requires the exact relay names on every call; use `Вхід 25-Е` and `Ліфт
+пасажирський 25-Е` in the automation.
+
 Home Assistant custom integration for approving recipients of the existing `SmartHouse` Telegram bot before they can receive temporary building-access keys.
 
 ## What it does

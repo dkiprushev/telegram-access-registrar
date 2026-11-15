@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Any
+import base64
 
 from aiohttp import ClientError, ClientSession
 
@@ -52,3 +53,18 @@ class TelegramApi:
 
     async def async_answer_callback(self, callback_id: str, text: str) -> None:
         await self._post("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
+
+    async def async_send_photo(self, chat_id: int, image: dict[str, str], caption: str) -> None:
+        """Send a QR image returned by Akuvox's safe panel API."""
+        try:
+            raw = base64.b64decode(image["data"], validate=True)
+            form = __import__("aiohttp").FormData()
+            form.add_field("chat_id", str(chat_id))
+            form.add_field("caption", caption)
+            form.add_field("photo", raw, filename="access-qr.png", content_type=image.get("content_type", "image/png"))
+            async with self._session.post(f"{self._base_url}/sendPhoto", data=form, timeout=35) as response:
+                body = await response.json(content_type=None)
+        except (KeyError, ValueError, ClientError, TimeoutError) as err:
+            raise TelegramApiError("Telegram QR delivery failed") from err
+        if not response.ok or not body.get("ok"):
+            raise TelegramApiError(str(body.get("description", "Telegram API error")))
