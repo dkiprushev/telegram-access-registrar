@@ -32,7 +32,10 @@ class TelegramAccessRegistrarConfigFlow(config_entries.ConfigFlow, domain=DOMAIN
             step_id="user",
             data_schema=vol.Schema({
                 vol.Required(CONF_BOT_TOKEN): str,
-                vol.Required(CONF_ADMIN_CHAT_ID): int,
+                # Home Assistant's form frontend submits number fields as text.
+                # Coercion keeps the config flow compatible with both the UI and
+                # YAML/test callers while retaining an integer in the entry.
+                vol.Required(CONF_ADMIN_CHAT_ID): vol.Coerce(int),
             }),
             errors=errors,
         )
