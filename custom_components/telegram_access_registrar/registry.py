@@ -45,7 +45,12 @@ class AccessRegistry:
         identity = self._identity(chat, user)
         key = str(identity["chat_id"])
         if key in self._data["approved"]:
-            return False, deepcopy(self._data["approved"][key])
+            # A user can add or rename their Telegram username after approval.
+            # Refresh presentation fields while retaining explicit permissions.
+            identity["can_control_home"] = bool(self._data["approved"][key].get("can_control_home", False))
+            self._data["approved"][key] = identity
+            await self._save()
+            return False, deepcopy(identity)
         existing = self._data["pending"].get(key)
         self._data["pending"][key] = identity
         await self._save()
