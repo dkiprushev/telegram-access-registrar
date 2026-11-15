@@ -76,9 +76,10 @@ class RegistrarCoordinator:
         chat_id = int(chat["id"])
         command, argument = self._command(str(message.get("text", "")))
         if command == "/whoami":
+            is_admin = user.get("id") == self._admin_chat_id
             await self._api.async_send_message(
                 chat_id,
-                f"Telegram User ID: {user.get('id')}\nChat ID: {chat_id}",
+                f"Telegram User ID: {user.get('id')}\nChat ID: {chat_id}\nАдминистратор: {'да' if is_admin else 'нет'}",
             )
             return
         if command == COMMAND_START:
