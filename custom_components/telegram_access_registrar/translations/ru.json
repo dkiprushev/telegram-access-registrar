@@ -1,0 +1,20 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Регистратор доступа Telegram",
+        "description": "Используйте отдельный токен бота. Администратор должен предварительно нажать Start у этого бота.",
+        "data": {
+          "bot_token": "Токен бота",
+          "admin_chat_id": "Chat ID администратора"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Не удалось проверить токен Telegram-бота."
+    },
+    "abort": {
+      "already_configured": "Этот Telegram-бот уже настроен."
+    }
+  }
+}

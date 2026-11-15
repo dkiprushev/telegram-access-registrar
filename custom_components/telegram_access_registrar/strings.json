@@ -1,0 +1,20 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Telegram Access Registrar",
+        "description": "Use a dedicated bot token. The admin must already have started this bot.",
+        "data": {
+          "bot_token": "Bot token",
+          "admin_chat_id": "Administrator chat ID"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to validate the Telegram bot token."
+    },
+    "abort": {
+      "already_configured": "This Telegram bot is already configured."
+    }
+  }
+}

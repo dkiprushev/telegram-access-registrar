@@ -1,0 +1,34 @@
+approve:
+  name: Approve registration
+  description: Approve a pending Telegram registration by its numeric chat ID.
+  fields:
+    chat_id:
+      required: true
+      selector:
+        number:
+          mode: box
+reject:
+  name: Reject registration
+  description: Reject a pending Telegram registration by its numeric chat ID.
+  fields:
+    chat_id:
+      required: true
+      selector:
+        number:
+          mode: box
+list_requests:
+  name: List registrations
+  description: Return pending and approved registrations without exposing the bot token.
+send_message:
+  name: Send approved recipient a message
+  description: Send a message only to an approved username.
+  fields:
+    username:
+      required: true
+      selector:
+        text:
+    message:
+      required: true
+      selector:
+        text:
+          multiline: true
