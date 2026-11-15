@@ -83,7 +83,9 @@ class RegistrarCoordinator:
             else:
                 await self._api.async_send_message(chat_id, "Вы уже зарегистрированы.")
             return
-        if command == COMMAND_ACCESS and chat_id == self._admin_chat_id:
+        # Authorisation belongs to the Telegram user, not to the destination
+        # chat.  This keeps admin commands valid outside a private chat too.
+        if command == COMMAND_ACCESS and user.get("id") == self._admin_chat_id:
             await self._async_request_access(argument)
             return
         if chat_id != self._admin_chat_id:
