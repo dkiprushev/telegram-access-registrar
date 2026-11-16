@@ -11,7 +11,7 @@ class AsyncStore(Protocol):
 
 
 def _empty() -> dict[str, Any]:
-    return {"version": 1, "approved": {}, "pending": {}}
+    return {"version": 1, "approved": {}, "pending": {}, "news_subscribers": []}
 
 
 class AccessRegistry:
@@ -82,6 +82,7 @@ class AccessRegistry:
     async def async_remove_approved(self, chat_id: int) -> None:
         """Remove registration and its associated home control permission."""
         if self._data["approved"].pop(str(chat_id), None) is not None:
+            self._remove_news_subscription(chat_id)
             await self._save()
 
     async def async_reject(self, chat_id: int) -> dict[str, Any] | None:
@@ -104,8 +105,39 @@ class AccessRegistry:
         if item is None:
             return None
         item["can_control_home"] = allowed
+        if not allowed:
+            self._remove_news_subscription(chat_id)
         await self._save()
         return deepcopy(item)
+
+    def news_subscribers(self) -> tuple[int, ...]:
+        return tuple(
+            chat_id for chat_id in self._data["news_subscribers"]
+            if self._data["approved"].get(str(chat_id), {}).get("can_control_home")
+        )
+
+    async def async_subscribe_to_news(self, chat_id: int) -> bool:
+        """Subscribe an authorized chat. Return true for a new subscription."""
+        if not self._data["approved"].get(str(chat_id), {}).get("can_control_home"):
+            return False
+        if chat_id in self._data["news_subscribers"]:
+            return False
+        self._data["news_subscribers"].append(chat_id)
+        await self._save()
+        return True
+
+    def _remove_news_subscription(self, chat_id: int) -> bool:
+        subscribers = self._data["news_subscribers"]
+        if chat_id not in subscribers:
+            return False
+        subscribers.remove(chat_id)
+        return True
+
+    async def async_unsubscribe_from_news(self, chat_id: int) -> bool:
+        if not self._remove_news_subscription(chat_id):
+            return False
+        await self._save()
+        return True
 
     def snapshot(self) -> dict[str, list[dict[str, Any]]]:
         return {

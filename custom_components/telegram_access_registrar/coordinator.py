@@ -26,6 +26,7 @@ class RegistrarCoordinator:
         assist_reply: Callable[..., Awaitable[bool]] | None = None,
         log_request: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         confirm_change: Callable[[int, str, str, str], Awaitable[None]] | None = None,
+        news_command: Callable[[int, str], Awaitable[None]] | None = None,
     ) -> None:
         self._api = api
         self._registry = registry
@@ -35,6 +36,7 @@ class RegistrarCoordinator:
         self._assist_reply = assist_reply
         self._log_request = log_request
         self._confirm_change = confirm_change
+        self._news_command = news_command
         self._pending_stock: dict[int, tuple[str, list[dict[str, Any]]]] = {}
         self._offset: int | None = None
         self._task: asyncio.Task[None] | None = None
@@ -103,6 +105,12 @@ class RegistrarCoordinator:
         private_user = chat.get("type") == "private" and user.get("id") == chat_id
         approved = self._registry.get_approved(chat_id)
         command, argument = self._command(str(message.get("text", "")))
+        if command in {"/news", "/news_unsubscribe"}:
+            if private_user and approved and approved.get("can_control_home") and self._news_command is not None:
+                await self._news_command(chat_id, command)
+            elif private_user:
+                await self._api.async_send_message(chat_id, "Для сводки нужно право общения с домом.")
+            return
         if command in {"/home_allow", "/home_revoke", "/home_users"}:
             if private_user and chat_id == self._admin_chat_id:
                 await self._manage_home_users(chat_id, command, argument)

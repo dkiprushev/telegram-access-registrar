@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 import base64
 
-from aiohttp import ClientError, ClientSession
+from aiohttp import ClientError, ClientSession, FormData
 
 
 class TelegramApiError(RuntimeError):
@@ -68,6 +68,23 @@ class TelegramApi:
 
     async def async_answer_callback(self, callback_id: str, text: str) -> None:
         await self._post("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
+
+    async def async_send_voice(self, chat_id: int, voice: bytes, *, caption: str = "") -> None:
+        """Upload an Ogg Opus recording as a Telegram voice note."""
+        form = FormData()
+        form.add_field("chat_id", str(chat_id))
+        form.add_field("voice", voice, filename="smarthouse-news.ogg", content_type="audio/ogg")
+        if caption:
+            form.add_field("caption", caption)
+        try:
+            async with self._session.post(
+                f"{self._base_url}/sendVoice", data=form, timeout=35, allow_redirects=False,
+            ) as response:
+                body = await response.json(content_type=None)
+        except (ClientError, TimeoutError, ValueError) as err:
+            raise TelegramApiError("Telegram voice delivery failed") from err
+        if not response.ok or not isinstance(body, dict) or body.get("ok") is not True:
+            raise TelegramApiError("Telegram rejected the voice note")
 
     async def async_send_photo(self, chat_id: int, image: dict[str, str], caption: str) -> None:
         """Send a QR image returned by Akuvox's safe panel API."""

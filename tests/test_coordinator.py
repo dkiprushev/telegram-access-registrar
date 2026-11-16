@@ -88,3 +88,29 @@ async def test_home_dialog_routes_photo_and_followups_to_same_agent():
         (1, "добавь на склад", None),
     ]
     assert not api.messages
+
+
+async def test_news_commands_require_private_chat_and_home_control():
+    from unittest.mock import AsyncMock
+
+    api = FakeApi()
+    registry = AccessRegistry(MemoryStore())
+    await registry.async_load()
+    await registry.async_ensure_admin(1)
+    await registry.async_request({"id": 2}, {"id": 2, "first_name": "Guest"})
+    await registry.async_approve(2)
+    handler = AsyncMock()
+    coordinator = RegistrarCoordinator(api, registry, 1, lambda _: None, news_command=handler)
+
+    async def send(chat_type, text):
+        await coordinator.async_handle_update({
+            "message": {"chat": {"id": 2, "type": chat_type}, "from": {"id": 2}, "text": text}
+        })
+
+    await send("private", "/news")
+    assert "право общения с домом" in api.messages[-1][1]
+    await registry.async_set_home_control(2, True)
+    await send("group", "/news")
+    handler.assert_not_awaited()
+    await send("private", "/news")
+    handler.assert_awaited_once_with(2, "/news")

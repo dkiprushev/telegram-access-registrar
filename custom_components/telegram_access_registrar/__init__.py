@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Any
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import voluptuous as vol
 
@@ -10,6 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.util import dt as dt_util
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.event import async_track_point_in_utc_time
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers import llm
 
@@ -34,14 +35,40 @@ from .const import (
 )
 from .coordinator import RegistrarCoordinator
 from .inventory import InventoryAssistant
+from .news import NewsBulletin, next_bulletin
 from .registry import AccessRegistry
+
+NEWS_CONFIG = "telegram_access_registrar_news_config"
+NEWS_SERVICE = "news_now"
+_NEWS_SCHEMA = vol.Schema({
+    vol.Optional("enabled", default=False): bool,
+    vol.Optional("ai_task", default="ai_task.codex_assist_ai_task"): str,
+    vol.Optional("tts", default=dict): vol.Schema({
+        vol.Optional("provider", default="openai"): vol.In(["openai"]),
+        vol.Optional("voice", default="nova"): vol.In([
+            "alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx",
+            "sage", "shimmer", "verse", "marin", "cedar",
+        ]),
+        vol.Optional("api_key"): vol.All(str, vol.Length(min=1)),
+    }),
+})
+CONFIG_SCHEMA = vol.Schema(
+    {vol.Optional(DOMAIN, default=dict): vol.Schema({vol.Optional("news", default=dict): _NEWS_SCHEMA})},
+    extra=vol.ALLOW_EXTRA,
+)
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    hass.data[NEWS_CONFIG] = config[DOMAIN]["news"]
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Start one independent Telegram long-polling registration bot."""
     store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY_PREFIX}.{entry.entry_id}")
     registry = AccessRegistry(store)
-    api = TelegramApi(async_get_clientsession(hass), entry.data[CONF_BOT_TOKEN])
+    session = async_get_clientsession(hass)
+    api = TelegramApi(session, entry.data[CONF_BOT_TOKEN])
     def request_access(data: dict[str, Any]) -> None:
         """Make /access immediately issue the deliberately fixed guest key."""
         recipient = data.get("recipient", {})
@@ -63,12 +90,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     inventory = InventoryAssistant(hass)
     assist = TelegramAssist(hass, api, inventory)
+    news_config = hass.data[NEWS_CONFIG]
+    bulletin = NewsBulletin(hass, session, api, int(entry.data[CONF_ADMIN_CHAT_ID]), news_config)
     log_path = request_log.storage_path(hass.config, entry.entry_id)
 
     async def log_request(update: dict[str, Any]) -> None:
         await hass.async_add_executor_job(
             request_log.record, log_path, int(entry.data[CONF_ADMIN_CHAT_ID]), update
         )
+
+    async def news_command(chat_id: int, command: str) -> None:
+        await bulletin.handle_command(registry, chat_id, command)
 
     coordinator = RegistrarCoordinator(
         api,
@@ -79,14 +111,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         assist_reply=assist.async_reply,
         log_request=log_request,
         confirm_change=assist.async_confirm_change,
+        news_command=news_command,
     )
     await coordinator.async_start()
     await registry.async_ensure_admin(int(entry.data[CONF_ADMIN_CHAT_ID]))
+    cancel_news = None
+    news_stopped = False
+
+    async def scheduled_news(_now: datetime) -> None:
+        nonlocal cancel_news
+        if news_stopped:
+            return
+        cancel_news = async_track_point_in_utc_time(hass, scheduled_news, next_bulletin(datetime.now(UTC)))
+        await bulletin.run(deliver=True, scheduled=True, recipients=registry.news_subscribers)
+
+    def stop_news() -> None:
+        nonlocal news_stopped
+        news_stopped = True
+        bulletin.close()
+        if cancel_news is not None:
+            cancel_news()
+
+    if news_config["enabled"]:
+        cancel_news = async_track_point_in_utc_time(hass, scheduled_news, next_bulletin(datetime.now(UTC)))
+    entry.async_on_unload(stop_news)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "registry": registry,
         "request_log_path": log_path,
         "coordinator": coordinator,
         "api": api,  # Kept runtime-only; never persisted.
+        "news": bulletin,
     }
     _async_register_services(hass)
     entry.async_on_unload(llm.async_register_api(hass, SmartHouseAPI(hass, inventory, entry.entry_id, api)))
@@ -169,6 +223,17 @@ def _async_register_services(hass: HomeAssistant) -> None:
             call.data.get("before_id"), call.data.get("chat_id"),
         )
 
+    async def news_now(call: ServiceCall) -> dict[str, Any]:
+        user_id = call.context.user_id
+        user = await hass.auth.async_get_user(user_id) if user_id else None
+        if user is None or not user.is_admin:
+            raise Unauthorized(context=call.context)
+        return await _runtime(hass)["news"].run(deliver=call.data["deliver"])
+
+    hass.services.async_register(
+        DOMAIN, NEWS_SERVICE, news_now,
+        vol.Schema({vol.Optional("deliver", default=False): bool}), supports_response="only",
+    )
     hass.services.async_register(
         DOMAIN, "list_request_log", list_request_log,
         vol.Schema({
@@ -193,6 +258,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await runtime["coordinator"].async_stop()
     if not hass.data[DOMAIN]:
         hass.services.async_remove(DOMAIN, "list_request_log")
+        hass.services.async_remove(DOMAIN, NEWS_SERVICE)
         for service in (SERVICE_APPROVE, SERVICE_REJECT, SERVICE_LIST_REQUESTS, SERVICE_SEND_MESSAGE, SERVICE_ISSUE_AKUVOX_KEY, SERVICE_SET_HOME_CONTROL, SERVICE_SET_ADMIN_CHAT_ID):
             hass.services.async_remove(DOMAIN, service)
     return True

@@ -7,6 +7,16 @@ approve:
       selector:
         number:
           mode: box
+news_now:
+  name: Preview or send the SmartHouse news bulletin
+  description: Generate the Russian voice bulletin now. Home Assistant administrators only.
+  fields:
+    deliver:
+      name: Send to Telegram
+      description: Send the voice note to the configured administrator chat. Leave off to preview without sending to Telegram.
+      default: false
+      selector:
+        boolean:
 list_request_log:
   name: List SmartHouse requests
   description: Read inbound messages and button presses outside the administrator chat. Home Assistant administrators only.
