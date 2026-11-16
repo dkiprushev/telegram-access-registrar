@@ -309,3 +309,54 @@ async def test_script_errors_identify_provider_and_invalid_output_without_loggin
     call.return_value = {"data": {"stories_json": [{"id": 2, "text": "private model detail"}]}}
     with pytest.raises(news.ScriptError, match="^AI Task returned an invalid or oversized script$"):
         await news.write_script(hass, "ai_task.test", [article(0)])
+
+
+@pytest.mark.parametrize(("key", "status", "detail"), [
+    (" ", 200, "Не задан ключ"),
+    ("fixture-key", 401, "OpenAI отклонил API-ключ"),
+    ("fixture-key", 403, "нет доступа"),
+    ("fixture-key", 429, "HTTP 429"),
+])
+async def test_speech_reports_safe_configuration_and_provider_errors(key, status, detail):
+    response = AsyncMock()
+    response.__aenter__.return_value = SimpleNamespace(status=status)
+    session = SimpleNamespace(post=Mock(return_value=response))
+    with pytest.raises(news.SpeechError, match=detail) as error:
+        await news.synthesize(session, {"api_key": key, "voice": "nova"}, "Новости.")
+    assert "fixture-key" not in str(error.value)
+    if not key.strip():
+        session.post.assert_not_called()
+
+
+async def test_home_assistant_tts_uses_assist_voice_and_validates_opus(monkeypatch):
+    import sys
+
+    async def audio():
+        yield VOICE[:24]
+        yield VOICE[24:]
+
+    stream = SimpleNamespace(async_set_message=Mock(), async_stream_result=audio)
+    tts = SimpleNamespace(async_create_stream=Mock(return_value=stream))
+    pipeline = SimpleNamespace(tts_engine="tts.piper", tts_language="ru_RU", tts_voice="ru_RU-irina-medium")
+    get_pipeline = Mock(return_value=pipeline)
+    monkeypatch.setitem(sys.modules, "homeassistant.components", SimpleNamespace(tts=tts))
+    monkeypatch.setitem(
+        sys.modules, "homeassistant.components.assist_pipeline.pipeline",
+        SimpleNamespace(async_get_pipeline=get_pipeline),
+    )
+    hass = object()
+    voice, duration = await news.synthesize_with_home_assistant(hass, {"pipeline_id": "russian"}, "Новости.")
+    assert voice == VOICE and duration == 60
+    get_pipeline.assert_called_once_with(hass, "russian")
+    tts.async_create_stream.assert_called_once_with(
+        hass, "tts.piper", language="ru_RU",
+        options={
+            "preferred_format": "opus", "preferred_sample_rate": 48000,
+            "preferred_sample_channels": 1, "voice": "ru_RU-irina-medium",
+        },
+    )
+    stream.async_set_message.assert_called_once_with("Новости.")
+
+    pipeline.tts_engine = None
+    with pytest.raises(news.SpeechError, match="не выбран синтезатор"):
+        await news.synthesize_with_home_assistant(hass, {}, "Новости.")

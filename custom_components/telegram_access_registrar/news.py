@@ -27,6 +27,17 @@ class ScriptError(ValueError):
     """A safe diagnostic that contains no model or source content."""
 
 
+class SpeechError(ValueError):
+    """A diagnostic safe to log and show in Telegram."""
+
+
+_SPEECH_HTTP_ERRORS = {
+    401: "OpenAI отклонил API-ключ. Проверь ключ для новостей в secrets.yaml.",
+    403: "У проекта OpenAI нет доступа к синтезу речи.",
+    429: "OpenAI вернул HTTP 429. Проверь лимит запросов и баланс API.",
+}
+
+
 @dataclass(frozen=True)
 class Source:
     name: str
@@ -373,22 +384,64 @@ def opus_duration(voice: bytes) -> float:
 
 
 async def synthesize(session, config, script: str) -> tuple[bytes, float]:
-    key = config.get("api_key")
+    key = (config.get("api_key") or "").strip()
     if not key:
-        raise ValueError("Missing OpenAI TTS API key")
+        raise SpeechError("Не задан ключ news.tts.api_key. Добавь его через secrets.yaml.")
     async with session.post(
         "https://api.openai.com/v1/audio/speech",
         headers={"Authorization": f"Bearer {key}"},
         json={
-            "model": "gpt-4o-mini-tts", "voice": config["voice"], "input": script,
+            "model": "gpt-4o-mini-tts", "voice": config.get("voice", "nova"), "input": script,
             "response_format": "opus",
             "instructions": "Женский русскоязычный голос, чёткая нейтральная новостная подача, темп около 135 слов в минуту.",
         }, timeout=60, allow_redirects=False,
     ) as response:
         if response.status != 200:
-            raise ValueError(f"OpenAI TTS HTTP {response.status}")
+            raise SpeechError(_SPEECH_HTTP_ERRORS.get(response.status, f"OpenAI TTS вернул HTTP {response.status}."))
         voice = await _limited_body(response, _MAX_VOICE_BYTES)
-    return voice, opus_duration(voice)
+    try:
+        duration = opus_duration(voice)
+    except ValueError as err:
+        raise SpeechError("OpenAI вернул неполное аудио или формат, отличный от OGG/Opus.") from err
+    return voice, duration
+
+
+async def synthesize_with_home_assistant(hass, config, script: str) -> tuple[bytes, float]:
+    from homeassistant.components import tts
+    from homeassistant.components.assist_pipeline.pipeline import async_get_pipeline
+
+    engine = config.get("entity_id")
+    language = config.get("language")
+    voice = config.get("voice")
+    if not engine:
+        pipeline = async_get_pipeline(hass, config.get("pipeline_id"))
+        engine = pipeline.tts_engine
+        language = language or pipeline.tts_language
+        voice = voice or pipeline.tts_voice
+    if not engine:
+        raise SpeechError("В профиле Assist не выбран синтезатор речи.")
+
+    options = {"preferred_format": "opus", "preferred_sample_rate": 48000, "preferred_sample_channels": 1}
+    if voice:
+        options["voice"] = voice
+    try:
+        async with asyncio.timeout(60):
+            stream = tts.async_create_stream(hass, engine, language=language, options=options)
+            stream.async_set_message(script)
+            audio = bytearray()
+            async for chunk in stream.async_stream_result():
+                audio.extend(chunk)
+                if len(audio) > _MAX_VOICE_BYTES:
+                    raise SpeechError("Озвучка Home Assistant превысила допустимый размер.")
+    except SpeechError:
+        raise
+    except Exception as err:
+        raise SpeechError(f"Синтезатор Home Assistant не вернул аудио ({type(err).__name__}).") from err
+    voice_bytes = bytes(audio)
+    try:
+        return voice_bytes, opus_duration(voice_bytes)
+    except ValueError as err:
+        raise SpeechError("Home Assistant не вернул полный поток OGG/Opus.") from err
 
 
 class NewsBulletin:
@@ -488,7 +541,11 @@ class NewsBulletin:
             stage = "сценарий"
             script, selected = await write_script(self.hass, self.config["ai_task"], articles, prompt)
             stage = "озвучка"
-            voice, duration = await synthesize(self.session, self.config["tts"], script)
+            speech_config = self.config["tts"]
+            if speech_config.get("provider") == "home_assistant":
+                voice, duration = await synthesize_with_home_assistant(self.hass, speech_config, script)
+            else:
+                voice, duration = await synthesize(self.session, speech_config, script)
             links = [article.url for article in selected]
             sent = 0
             delivery_failed = 0
@@ -526,15 +583,20 @@ class NewsBulletin:
                 "sources": links, "unavailable_sources": failures,
             }
         except Exception as err:
-            detail = str(err) if isinstance(err, ScriptError) else type(err).__name__
+            detail = str(err) if isinstance(err, (ScriptError, SpeechError)) else type(err).__name__
             _LOGGER.warning("News bulletin failed at %s (%s)", stage, detail)
             if deliver and not self._closed:
                 message = f"Голосовая сводка не отправлена. Ошибка на этапе «{stage}»."
+                if isinstance(err, SpeechError):
+                    message += f" {detail}"
                 await self._notify(message)
                 if recipients is not None and len(targets) == 1 and targets[0] != self.admin_chat_id:
                     if targets[0] in recipients():
                         await self._notify(message, targets[0])
-            return {"status": "error", "stage": stage}
+            result = {"status": "error", "stage": stage}
+            if isinstance(err, SpeechError):
+                result["detail"] = detail
+            return result
 
     async def _notify(self, message: str, chat_id: int | None = None) -> None:
         try:

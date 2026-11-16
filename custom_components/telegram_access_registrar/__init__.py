@@ -44,11 +44,11 @@ _NEWS_SCHEMA = vol.Schema({
     vol.Optional("enabled", default=False): bool,
     vol.Optional("ai_task", default="ai_task.codex_assist_ai_task"): str,
     vol.Optional("tts", default=dict): vol.Schema({
-        vol.Optional("provider", default="openai"): vol.In(["openai"]),
-        vol.Optional("voice", default="nova"): vol.In([
-            "alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx",
-            "sage", "shimmer", "verse", "marin", "cedar",
-        ]),
+        vol.Optional("provider", default="openai"): vol.In(["openai", "home_assistant"]),
+        vol.Optional("voice"): vol.All(str, vol.Length(min=1)),
+        vol.Optional("entity_id"): vol.Match(r"^tts\.[a-z0-9_]+$"),
+        vol.Optional("language"): str,
+        vol.Optional("pipeline_id"): str,
         vol.Optional("api_key"): vol.All(str, vol.Length(min=1)),
     }),
 })
