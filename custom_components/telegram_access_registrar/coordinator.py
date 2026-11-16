@@ -96,9 +96,10 @@ class RegistrarCoordinator:
         if not isinstance(chat, dict) or not isinstance(user, dict) or not isinstance(chat.get("id"), int):
             return
         chat_id = int(chat["id"])
+        private_user = chat.get("type") == "private" and user.get("id") == chat_id
         approved = self._registry.get_approved(chat_id)
         photos = message.get("photo")
-        if approved and approved.get("can_control_home") and isinstance(photos, list) and photos:
+        if private_user and approved and approved.get("can_control_home") and isinstance(photos, list) and photos:
             photo = photos[-1]
             if not isinstance(photo, dict) or not isinstance(photo.get("file_id"), str): return
             try:
@@ -114,6 +115,10 @@ class RegistrarCoordinator:
             await self._send_draft(chat_id, items, "Черновик по фото. Можно уточнить обычным сообщением:")
             return
         command, argument = self._command(str(message.get("text", "")))
+        if command in {"/home_allow", "/home_revoke", "/home_users"}:
+            if private_user and chat_id == self._admin_chat_id:
+                await self._manage_home_users(chat_id, command, argument)
+            return
         if command == "/whoami":
             is_admin = user.get("id") == self._admin_chat_id
             await self._api.async_send_message(
@@ -134,7 +139,7 @@ class RegistrarCoordinator:
         if command == COMMAND_ACCESS and user.get("id") == self._admin_chat_id:
             await self._async_request_access(argument)
             return
-        if approved and approved.get("can_control_home") and message.get("text"):
+        if private_user and approved and approved.get("can_control_home") and message.get("text"):
             try:
                 text = str(message["text"])
                 pending = self._pending_stock.get(chat_id)
@@ -161,6 +166,41 @@ class RegistrarCoordinator:
             return
         if chat_id != self._admin_chat_id:
             await self._api.async_send_message(chat_id, "Нажмите /start, чтобы отправить заявку на доступ.")
+
+    async def _manage_home_users(self, chat_id: int, command: str, argument: str) -> None:
+        if command == "/home_users":
+            users = self._registry.snapshot()["approved"]
+            lines = [
+                f"{'✓' if row.get('can_control_home') else '—'} "
+                f"@{row['username'] or 'без_username'} · {row['chat_id']}"
+                for row in users
+            ]
+            for start in range(0, len(lines), 40):
+                await self._api.async_send_message(chat_id, "Права на общение с домом:\n" + "\n".join(lines[start:start + 40]))
+            if not lines:
+                await self._api.async_send_message(chat_id, "Одобренных пользователей пока нет.")
+            return
+        target = (
+            self._registry.get_approved(int(argument))
+            if argument.isascii() and argument.isdecimal() and len(argument) <= 20
+            else self._registry.get_approved_by_username(argument) if argument else None
+        )
+        if not target:
+            await self._api.async_send_message(chat_id, "Укажи @username или ID одобренного пользователя. Список: /home_users")
+            return
+        allowed = command == "/home_allow"
+        target_id = target["chat_id"]
+        if target_id == self._admin_chat_id and not allowed:
+            await self._api.async_send_message(chat_id, "Администратор сохраняет доступ к дому.")
+            return
+        updated = await self._registry.async_set_home_control(target_id, allowed)
+        if not updated:
+            await self._api.async_send_message(chat_id, "Пользователь больше не одобрен.")
+            return
+        if not allowed:
+            self._pending_stock.pop(target_id, None)
+        status = "разрешено" if allowed else "отозвано"
+        await self._api.async_send_message(chat_id, f"Общение с домом для {target_id}: {status}.")
 
     async def _notify_admin_of_request(self, identity: dict[str, Any]) -> None:
         handle = f"@{identity['username']}" if identity.get("username") else "без username"
