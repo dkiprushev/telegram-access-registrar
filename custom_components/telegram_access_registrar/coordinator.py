@@ -21,11 +21,13 @@ class RegistrarCoordinator:
         registry: AccessRegistry,
         admin_chat_id: int,
         fire_access_event: Callable[[dict[str, Any]], None],
+        answer_inventory: Callable[[str], Awaitable[str]],
     ) -> None:
         self._api = api
         self._registry = registry
         self._admin_chat_id = admin_chat_id
         self._fire_access_event = fire_access_event
+        self._answer_inventory = answer_inventory
         self._offset: int | None = None
         self._task: asyncio.Task[None] | None = None
 
@@ -94,6 +96,16 @@ class RegistrarCoordinator:
         # chat.  This keeps admin commands valid outside a private chat too.
         if command == COMMAND_ACCESS and user.get("id") == self._admin_chat_id:
             await self._async_request_access(argument)
+            return
+        approved = self._registry.get_approved(chat_id)
+        if approved and approved.get("can_control_home") and message.get("text"):
+            try:
+                answer = await self._answer_inventory(str(message["text"]))
+            except Exception as err:  # The bot must remain available if Grocy/AI is down.
+                _LOGGER.warning("Inventory question failed: %s", err)
+                await self._api.async_send_message(chat_id, "Не смог получить данные Grocy. Попробуйте ещё раз позже.")
+            else:
+                await self._api.async_send_message(chat_id, answer[:4000])
             return
         if chat_id != self._admin_chat_id:
             await self._api.async_send_message(chat_id, "Нажмите /start, чтобы отправить заявку на доступ.")

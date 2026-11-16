@@ -29,6 +29,7 @@ from .const import (
     STORAGE_VERSION,
 )
 from .coordinator import RegistrarCoordinator
+from .inventory import InventoryAssistant
 from .registry import AccessRegistry
 
 
@@ -61,6 +62,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         registry,
         int(entry.data[CONF_ADMIN_CHAT_ID]),
         lambda data: (hass.bus.async_fire(EVENT_ACCESS_REQUESTED, data), request_access(data)),
+        InventoryAssistant(hass).async_answer,
     )
     await coordinator.async_start()
     await registry.async_ensure_admin(int(entry.data[CONF_ADMIN_CHAT_ID]))
