@@ -91,8 +91,8 @@ class RegistrarCoordinator:
                 raw, _ = await self._api.async_download_file(photo["file_id"])
                 items, _ = await self._propose_photo(raw, str(message.get("caption", "")))
             except Exception as err:
-                _LOGGER.warning("Photo inventory analysis failed: %s", err)
-                await self._api.async_send_message(chat_id, "Не смог разобрать фото. Попробуйте ещё раз.")
+                _LOGGER.exception("Photo inventory analysis failed for chat %s", chat_id)
+                await self._api.async_send_message(chat_id, f"Не смог разобрать фото (код: {type(err).__name__}).")
                 return
             if not items:
                 await self._api.async_send_message(chat_id, "На фото не удалось уверенно распознать предметы.")
