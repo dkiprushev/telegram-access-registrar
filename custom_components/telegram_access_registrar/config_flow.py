@@ -5,6 +5,7 @@ from datetime import datetime
 import sqlite3
 from string import punctuation
 
+import probatio
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -91,16 +92,22 @@ class RequestLogOptionsFlow(config_entries.OptionsFlow):
     _next_before_id = None
 
     async def async_step_init(self, user_input=None):
-        return self.async_show_menu(step_id="init", menu_options=["request_log"])
-
-    async def async_step_request_log(self, user_input=None):
+        errors = {}
+        chat_id_input = str(self._chat_id) if self._chat_id is not None else ""
         if user_input is not None:
-            chat_id = user_input.get("chat_id")
-            if chat_id == self._chat_id and user_input.get("older") and self._next_before_id is not None:
-                self._before_id = self._next_before_id
+            chat_id_input = user_input.get("chat_id", "").strip()
+            try:
+                chat_id = int(chat_id_input) if chat_id_input else None
+                if chat_id is not None and not -(2**63) <= chat_id < 2**63:
+                    raise ValueError("Chat ID is out of range")
+            except ValueError:
+                errors["chat_id"] = "invalid_chat_id"
             else:
-                self._before_id = None
-            self._chat_id = chat_id
+                if chat_id == self._chat_id and user_input.get("older") and self._next_before_id is not None:
+                    self._before_id = self._next_before_id
+                else:
+                    self._before_id = None
+                self._chat_id = chat_id
 
         path = request_log.storage_path(self.hass.config, self.config_entry.entry_id)
         try:
@@ -111,13 +118,14 @@ class RequestLogOptionsFlow(config_entries.OptionsFlow):
             return self.async_abort(reason="request_log_unavailable")
 
         self._next_before_id = page["next_before_id"]
-        fields = {vol.Optional("chat_id"): vol.Coerce(int)}
+        fields = {probatio.Optional("chat_id"): str}
         if self._next_before_id is not None:
-            fields[vol.Optional("older", default=False)] = bool
+            fields[probatio.Optional("older", default=False)] = bool
         return self.async_show_form(
-            step_id="request_log",
+            step_id="init",
+            errors=errors,
             data_schema=self.add_suggested_values_to_schema(
-                vol.Schema(fields), {"chat_id": self._chat_id} if self._chat_id is not None else {}
+                probatio.Schema(fields), {"chat_id": chat_id_input} if chat_id_input else {}
             ),
             description_placeholders={
                 "requests": "\n\n".join(_format_request(entry) for entry in page["requests"]) or "—"
