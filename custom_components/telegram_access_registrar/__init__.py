@@ -14,6 +14,8 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers import llm
 
 from .api import TelegramApi
+from . import request_log
+from homeassistant.exceptions import Unauthorized
 from .assist import SmartHouseAPI, TelegramAssist
 from .const import (
     CONF_ADMIN_CHAT_ID,
@@ -61,6 +63,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     inventory = InventoryAssistant(hass)
     assist = TelegramAssist(hass, api, inventory)
+    log_path = hass.config.path(".storage", f"{DOMAIN}.{entry.entry_id}.requests.sqlite")
+
+    async def log_request(update: dict[str, Any]) -> None:
+        await hass.async_add_executor_job(
+            request_log.record, log_path, int(entry.data[CONF_ADMIN_CHAT_ID]), update
+        )
+
     coordinator = RegistrarCoordinator(
         api,
         registry,
@@ -69,11 +78,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         assist.async_inventory_reply, inventory.async_propose_purchase, inventory.async_add_stock, inventory.async_propose_photo_purchase,
         inventory.async_revise_photo,
         assist.async_reply,
+        log_request,
     )
     await coordinator.async_start()
     await registry.async_ensure_admin(int(entry.data[CONF_ADMIN_CHAT_ID]))
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "registry": registry,
+        "request_log_path": log_path,
         "coordinator": coordinator,
         "api": api,  # Kept runtime-only; never persisted.
     }
@@ -148,6 +159,25 @@ def _async_register_services(hass: HomeAssistant) -> None:
         hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_ADMIN_CHAT_ID: call.data["chat_id"]})
         await hass.config_entries.async_reload(entry.entry_id)
 
+    async def list_request_log(call: ServiceCall) -> dict[str, Any]:
+        user_id = call.context.user_id
+        user = await hass.auth.async_get_user(user_id) if user_id else None
+        if user is None or not user.is_admin:
+            raise Unauthorized(context=call.context)
+        return await hass.async_add_executor_job(
+            request_log.read, _runtime(hass)["request_log_path"], call.data["limit"],
+            call.data.get("before_id"), call.data.get("chat_id"),
+        )
+
+    hass.services.async_register(
+        DOMAIN, "list_request_log", list_request_log,
+        vol.Schema({
+            vol.Optional("limit", default=25): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
+            vol.Optional("before_id"): vol.Coerce(int),
+            vol.Optional("chat_id"): vol.Coerce(int),
+        }),
+        supports_response="only",
+    )
     hass.services.async_register(DOMAIN, SERVICE_APPROVE, approve, vol.Schema({vol.Required("chat_id"): vol.Coerce(int)}), supports_response="optional")
     hass.services.async_register(DOMAIN, SERVICE_REJECT, reject, vol.Schema({vol.Required("chat_id"): vol.Coerce(int)}), supports_response="optional")
     hass.services.async_register(DOMAIN, SERVICE_LIST_REQUESTS, list_requests, supports_response="only")
@@ -162,6 +192,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     runtime = hass.data[DOMAIN].pop(entry.entry_id)
     await runtime["coordinator"].async_stop()
     if not hass.data[DOMAIN]:
+        hass.services.async_remove(DOMAIN, "list_request_log")
         for service in (SERVICE_APPROVE, SERVICE_REJECT, SERVICE_LIST_REQUESTS, SERVICE_SEND_MESSAGE, SERVICE_ISSUE_AKUVOX_KEY, SERVICE_SET_HOME_CONTROL, SERVICE_SET_ADMIN_CHAT_ID):
             hass.services.async_remove(DOMAIN, service)
     return True

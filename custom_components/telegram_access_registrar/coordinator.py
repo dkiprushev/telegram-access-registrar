@@ -28,6 +28,7 @@ class RegistrarCoordinator:
         propose_photo: Callable[[bytes, str], Awaitable[tuple[list[dict[str, Any]], str]]],
         revise_photo: Callable[[list[dict[str, Any]], str], Awaitable[list[dict[str, Any]]]],
         assist_reply: Callable[[int, str], Awaitable[bool]] | None = None,
+        log_request: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         self._api = api
         self._registry = registry
@@ -38,6 +39,7 @@ class RegistrarCoordinator:
         self._propose_photo = propose_photo
         self._revise_photo = revise_photo
         self._assist_reply = assist_reply
+        self._log_request = log_request
         self._pending_stock: dict[int, tuple[str, list[dict[str, Any]]]] = {}
         self._offset: int | None = None
         self._task: asyncio.Task[None] | None = None
@@ -87,6 +89,11 @@ class RegistrarCoordinator:
         return first.lower().split("@", 1)[0], arguments.strip()
 
     async def async_handle_update(self, update: dict[str, Any]) -> None:
+        if self._log_request is not None:
+            try:
+                await self._log_request(update)
+            except Exception:
+                _LOGGER.exception("Could not write Telegram request journal")
         if isinstance(update.get("message"), dict):
             await self._async_handle_message(update["message"])
         elif isinstance(update.get("callback_query"), dict):
