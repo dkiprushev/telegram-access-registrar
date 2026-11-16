@@ -161,8 +161,8 @@ async def test_preview_delivers_nothing_and_explicit_live_errors_notify_admin(mo
     monkeypatch.setattr(news, "collect", AsyncMock(return_value=(selected, [])))
     monkeypatch.setattr(news, "write_script", AsyncMock(return_value=("ИИ. Выпуск.", selected)))
     synthesize = AsyncMock(return_value=(VOICE, 60))
-    monkeypatch.setattr(news, "synthesize", synthesize)
-    bulletin = news.NewsBulletin(None, None, telegram, 123, {"ai_task": "ai_task.test", "tts": {}})
+    monkeypatch.setattr(news, "synthesize_with_home_assistant", synthesize)
+    bulletin = news.NewsBulletin(None, None, telegram, 123, {"ai_task": "ai_task.test"})
 
     preview = await bulletin.run(deliver=False)
     assert preview["status"] == "preview" and preview["duration_seconds"] == 60
@@ -202,9 +202,9 @@ async def test_first_news_command_subscribes_and_repeat_sends_to_caller(monkeypa
     collect = AsyncMock(return_value=(selected, []))
     monkeypatch.setattr(news, "collect", collect)
     monkeypatch.setattr(news, "write_script", AsyncMock(return_value=("ИИ. Выпуск.", selected)))
-    monkeypatch.setattr(news, "synthesize", AsyncMock(return_value=(VOICE, 60)))
+    monkeypatch.setattr(news, "synthesize_with_home_assistant", AsyncMock(return_value=(VOICE, 60)))
     hass = SimpleNamespace(async_create_task=asyncio.create_task)
-    bulletin = news.NewsBulletin(hass, None, telegram, 123, {"enabled": False, "ai_task": "ai_task.test", "tts": {}})
+    bulletin = news.NewsBulletin(hass, None, telegram, 123, {"enabled": False, "ai_task": "ai_task.test"})
 
     await bulletin.handle_command(registry, 456, "/news")
     assert registry.news_subscribers() == (456,)
@@ -235,8 +235,8 @@ async def test_scheduled_bulletin_only_sends_to_current_subscribers(monkeypatch)
         recipients.remove(456)
         return VOICE, 60
 
-    monkeypatch.setattr(news, "synthesize", synthesize)
-    bulletin = news.NewsBulletin(None, None, telegram, 123, {"ai_task": "ai_task.test", "tts": {}})
+    monkeypatch.setattr(news, "synthesize_with_home_assistant", synthesize)
+    bulletin = news.NewsBulletin(None, None, telegram, 123, {"ai_task": "ai_task.test"})
     result = await bulletin.run(deliver=True, scheduled=True, recipients=lambda: tuple(recipients))
     assert result["status"] == "sent"
     telegram.async_send_voice.assert_awaited_once()
@@ -250,7 +250,7 @@ async def test_subscriber_prompts_are_isolated_and_shared_editions_are_generated
     for chat_id in (123, 456, 789):
         await registry.async_ensure_admin(chat_id)
     telegram = SimpleNamespace(async_send_voice=AsyncMock(), async_send_message=AsyncMock())
-    bulletin = news.NewsBulletin(None, None, telegram, 123, {"ai_task": "ai_task.test", "tts": {}})
+    bulletin = news.NewsBulletin(None, None, telegram, 123, {"ai_task": "ai_task.test"})
     await bulletin.handle_command(registry, 456, "/news", "Только архитектура")
     assert registry.news_prompt(456) == "Только архитектура"
     assert registry.news_prompt(123) == ""
@@ -263,7 +263,7 @@ async def test_subscriber_prompts_are_isolated_and_shared_editions_are_generated
     synthesize = AsyncMock(side_effect=[(b"custom", 60), (b"default", 60)])
     monkeypatch.setattr(news, "collect", collect)
     monkeypatch.setattr(news, "write_script", write)
-    monkeypatch.setattr(news, "synthesize", synthesize)
+    monkeypatch.setattr(news, "synthesize_with_home_assistant", synthesize)
 
     await bulletin.run(
         deliver=True, scheduled=True, recipients=registry.news_subscribers, prompt_for=registry.news_prompt,
@@ -311,23 +311,6 @@ async def test_script_errors_identify_provider_and_invalid_output_without_loggin
         await news.write_script(hass, "ai_task.test", [article(0)])
 
 
-@pytest.mark.parametrize(("key", "status", "detail"), [
-    (" ", 200, "Не задан ключ"),
-    ("fixture-key", 401, "OpenAI отклонил API-ключ"),
-    ("fixture-key", 403, "нет доступа"),
-    ("fixture-key", 429, "HTTP 429"),
-])
-async def test_speech_reports_safe_configuration_and_provider_errors(key, status, detail):
-    response = AsyncMock()
-    response.__aenter__.return_value = SimpleNamespace(status=status)
-    session = SimpleNamespace(post=Mock(return_value=response))
-    with pytest.raises(news.SpeechError, match=detail) as error:
-        await news.synthesize(session, {"api_key": key, "voice": "nova"}, "Новости.")
-    assert "fixture-key" not in str(error.value)
-    if not key.strip():
-        session.post.assert_not_called()
-
-
 async def test_home_assistant_tts_uses_assist_voice_and_validates_opus(monkeypatch):
     import sys
 
@@ -345,9 +328,9 @@ async def test_home_assistant_tts_uses_assist_voice_and_validates_opus(monkeypat
         SimpleNamespace(async_get_pipeline=get_pipeline),
     )
     hass = object()
-    voice, duration = await news.synthesize_with_home_assistant(hass, {"pipeline_id": "russian"}, "Новости.")
+    voice, duration = await news.synthesize_with_home_assistant(hass, "Новости.")
     assert voice == VOICE and duration == 60
-    get_pipeline.assert_called_once_with(hass, "russian")
+    get_pipeline.assert_called_once_with(hass)
     tts.async_create_stream.assert_called_once_with(
         hass, "tts.piper", language="ru_RU",
         options={
@@ -357,9 +340,16 @@ async def test_home_assistant_tts_uses_assist_voice_and_validates_opus(monkeypat
     )
     stream.async_set_message.assert_called_once_with("Новости.")
 
-    pipeline.tts_engine = None
+    get_pipeline.return_value = SimpleNamespace(
+        tts_engine="tts.other", tts_language="ru", tts_voice="new_voice",
+    )
+    await news.synthesize_with_home_assistant(hass, "Следующий выпуск.")
+    assert tts.async_create_stream.call_args.args == (hass, "tts.other")
+    assert tts.async_create_stream.call_args.kwargs["options"]["voice"] == "new_voice"
+
+    get_pipeline.return_value.tts_engine = None
     with pytest.raises(news.SpeechError, match="не выбран синтезатор"):
-        await news.synthesize_with_home_assistant(hass, {}, "Новости.")
+        await news.synthesize_with_home_assistant(hass, "Новости.")
 
 
 def test_script_length_fallback_keeps_complete_stories_and_matching_sources():
@@ -370,3 +360,20 @@ def test_script_length_fallback_keeps_complete_stories_and_matching_sources():
     script, selected = news.build_script(stories, articles, trim_to_budget=True)
     assert news.count_words(script) == 141
     assert selected == [articles[0]]
+
+
+async def test_news_defaults_to_preferred_assist_voice_without_openai_key(monkeypatch):
+    telegram = SimpleNamespace(async_send_voice=AsyncMock(), async_send_message=AsyncMock())
+    selected = [article(0)]
+    monkeypatch.setattr(news, "collect", AsyncMock(return_value=(selected, [])))
+    monkeypatch.setattr(news, "write_script", AsyncMock(return_value=("ИИ. Выпуск.", selected)))
+    home_assistant = AsyncMock(return_value=(VOICE, 60))
+    monkeypatch.setattr(news, "synthesize_with_home_assistant", home_assistant)
+    hass = object()
+    bulletin = news.NewsBulletin(hass, None, telegram, 123, {"ai_task": "ai_task.test", "tts": {"provider": "openai"}})
+
+    result = await bulletin.run(deliver=False)
+
+    assert result["status"] == "preview"
+    home_assistant.assert_awaited_once_with(hass, "ИИ. Выпуск.")
+    telegram.async_send_voice.assert_not_awaited()

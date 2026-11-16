@@ -43,14 +43,8 @@ NEWS_SERVICE = "news_now"
 _NEWS_SCHEMA = vol.Schema({
     vol.Optional("enabled", default=False): bool,
     vol.Optional("ai_task", default="ai_task.codex_assist_ai_task"): str,
-    vol.Optional("tts", default=dict): vol.Schema({
-        vol.Optional("provider", default="openai"): vol.In(["openai", "home_assistant"]),
-        vol.Optional("voice"): vol.All(str, vol.Length(min=1)),
-        vol.Optional("entity_id"): vol.Match(r"^tts\.[a-z0-9_]+$"),
-        vol.Optional("language"): str,
-        vol.Optional("pipeline_id"): str,
-        vol.Optional("api_key"): vol.All(str, vol.Length(min=1)),
-    }),
+    # Accept existing YAML from releases with separate news TTS settings.
+    vol.Optional("tts"): dict,
 })
 CONFIG_SCHEMA = vol.Schema(
     {vol.Optional(DOMAIN, default=dict): vol.Schema({vol.Optional("news", default=dict): _NEWS_SCHEMA})},

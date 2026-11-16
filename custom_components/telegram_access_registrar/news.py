@@ -31,13 +31,6 @@ class SpeechError(ValueError):
     """A diagnostic safe to log and show in Telegram."""
 
 
-_SPEECH_HTTP_ERRORS = {
-    401: "OpenAI отклонил API-ключ. Проверь ключ для новостей в secrets.yaml.",
-    403: "У проекта OpenAI нет доступа к синтезу речи.",
-    429: "OpenAI вернул HTTP 429. Проверь лимит запросов и баланс API.",
-}
-
-
 @dataclass(frozen=True)
 class Source:
     name: str
@@ -395,41 +388,17 @@ def opus_duration(voice: bytes) -> float:
     raise ValueError("TTS did not return a complete Ogg/Opus stream")
 
 
-async def synthesize(session, config, script: str) -> tuple[bytes, float]:
-    key = (config.get("api_key") or "").strip()
-    if not key:
-        raise SpeechError("Не задан ключ news.tts.api_key. Добавь его через secrets.yaml.")
-    async with session.post(
-        "https://api.openai.com/v1/audio/speech",
-        headers={"Authorization": f"Bearer {key}"},
-        json={
-            "model": "gpt-4o-mini-tts", "voice": config.get("voice", "nova"), "input": script,
-            "response_format": "opus",
-            "instructions": "Женский русскоязычный голос, чёткая нейтральная новостная подача, темп около 135 слов в минуту.",
-        }, timeout=60, allow_redirects=False,
-    ) as response:
-        if response.status != 200:
-            raise SpeechError(_SPEECH_HTTP_ERRORS.get(response.status, f"OpenAI TTS вернул HTTP {response.status}."))
-        voice = await _limited_body(response, _MAX_VOICE_BYTES)
-    try:
-        duration = opus_duration(voice)
-    except ValueError as err:
-        raise SpeechError("OpenAI вернул неполное аудио или формат, отличный от OGG/Opus.") from err
-    return voice, duration
-
-
-async def synthesize_with_home_assistant(hass, config, script: str) -> tuple[bytes, float]:
+async def synthesize_with_home_assistant(hass, script: str) -> tuple[bytes, float]:
     from homeassistant.components import tts
     from homeassistant.components.assist_pipeline.pipeline import async_get_pipeline
 
-    engine = config.get("entity_id")
-    language = config.get("language")
-    voice = config.get("voice")
-    if not engine:
-        pipeline = async_get_pipeline(hass, config.get("pipeline_id"))
-        engine = pipeline.tts_engine
-        language = language or pipeline.tts_language
-        voice = voice or pipeline.tts_voice
+    try:
+        pipeline = async_get_pipeline(hass)
+    except Exception as err:
+        raise SpeechError("Не удалось прочитать предпочтительный профиль Assist.") from err
+    engine = pipeline.tts_engine
+    language = pipeline.tts_language
+    voice = pipeline.tts_voice
     if not engine:
         raise SpeechError("В профиле Assist не выбран синтезатор речи.")
 
@@ -553,11 +522,7 @@ class NewsBulletin:
             stage = "сценарий"
             script, selected = await write_script(self.hass, self.config["ai_task"], articles, prompt)
             stage = "озвучка"
-            speech_config = self.config["tts"]
-            if speech_config.get("provider") == "home_assistant":
-                voice, duration = await synthesize_with_home_assistant(self.hass, speech_config, script)
-            else:
-                voice, duration = await synthesize(self.session, speech_config, script)
+            voice, duration = await synthesize_with_home_assistant(self.hass, script)
             links = [article.url for article in selected]
             sent = 0
             delivery_failed = 0
