@@ -166,6 +166,8 @@ class InventoryAssistant:
             "Use ONLY the supplied Grocy snapshot: never invent stock. Include location and quantity when useful. "
             "If requested item is absent, say so, then mention only genuinely relevant alternatives from the snapshot. "
             "This is read-only: do not claim to add, remove, reserve, or buy anything.\n"
+            "If asked for photos, say that photo delivery requires the SmartHouse Telegram conversation agent. "
+            "Do not infer whether photos exist from this text-only snapshot.\n"
             f"Question: {question}\nGrocy snapshot: {context}"
         )
         result = await self._hass.services.async_call(

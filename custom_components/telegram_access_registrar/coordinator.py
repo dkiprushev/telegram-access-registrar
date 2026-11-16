@@ -27,7 +27,7 @@ class RegistrarCoordinator:
         add_stock: Callable[[list[dict[str, Any]]], Awaitable[tuple[list[str], list[str]]]],
         propose_photo: Callable[[bytes, str], Awaitable[tuple[list[dict[str, Any]], str]]],
         revise_photo: Callable[[list[dict[str, Any]], str], Awaitable[list[dict[str, Any]]]],
-        assist_reply: Callable[[int, str], Awaitable[None]] | None = None,
+        assist_reply: Callable[[int, str], Awaitable[bool]] | None = None,
     ) -> None:
         self._api = api
         self._registry = registry
@@ -144,7 +144,8 @@ class RegistrarCoordinator:
         if private_user and approved and approved.get("can_control_home") and message.get("text"):
             if command == "/assist" and self._assist_reply is not None:
                 try:
-                    await self._assist_reply(chat_id, argument)
+                    if not await self._assist_reply(chat_id, argument):
+                        await self._api.async_send_message(chat_id, "Настрой разговорный агент conversation.smarthouse_telegram с инструментами SmartHouse Grocy.")
                 except Exception as err:
                     _LOGGER.warning("Telegram Assist request failed: %s", type(err).__name__)
                     await self._api.async_send_message(chat_id, "Не удалось получить ответ Codex Assist. Проверь настройки разговорного агента.")
@@ -166,6 +167,12 @@ class RegistrarCoordinator:
                         return
                     await self._send_draft(chat_id, items, "Черновик добавления в Grocy:")
                     return
+                if self._assist_reply is not None and not command.startswith("/"):
+                    try:
+                        if await self._assist_reply(chat_id, text):
+                            return
+                    except Exception as err:
+                        _LOGGER.warning("Telegram Assist request failed: %s", type(err).__name__)
                 answer = await self._answer_inventory(text)
             except Exception as err:  # The bot must remain available if Grocy/AI is down.
                 _LOGGER.warning("Inventory question failed: %s", err)

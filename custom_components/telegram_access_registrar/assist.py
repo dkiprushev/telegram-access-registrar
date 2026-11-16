@@ -68,14 +68,14 @@ class TelegramAssist:
         self.inventory = inventory
         self.sessions: dict[int, str] = {}
 
-    async def async_reply(self, chat_id: int, question: str) -> None:
+    async def async_reply(self, chat_id: int, question: str) -> bool:
         if not question:
             await self.api.async_send_message(chat_id, "Напиши запрос после /assist.")
-            return
+            return True
         agent_id = "conversation.smarthouse_telegram"
-        if self.hass.states.get(agent_id) is None:
-            await self.api.async_send_message(chat_id, f"Настрой разговорный агент {agent_id}.")
-            return
+        state = self.hass.states.get(agent_id)
+        if state is None or state.state == "unavailable":
+            return False
         request = {"agent_id": agent_id, "text": question}
         if chat_id in self.sessions:
             request["conversation_id"] = self.sessions[chat_id]
@@ -100,6 +100,7 @@ class TelegramAssist:
             await self._send_photos(chat_id, requested)
         elif not speech:
             await self.api.async_send_message(chat_id, "Ассистент вернул пустой ответ.")
+        return True
 
     async def _send_photos(self, chat_id: int, requested: set[int]) -> None:
         grocy = self.inventory._grocy()
