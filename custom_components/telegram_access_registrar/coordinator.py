@@ -26,7 +26,7 @@ class RegistrarCoordinator:
         assist_reply: Callable[..., Awaitable[bool]] | None = None,
         log_request: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         confirm_change: Callable[[int, str, str, str], Awaitable[None]] | None = None,
-        news_command: Callable[[int, str], Awaitable[None]] | None = None,
+        news_command: Callable[[int, str, str], Awaitable[None]] | None = None,
     ) -> None:
         self._api = api
         self._registry = registry
@@ -107,7 +107,7 @@ class RegistrarCoordinator:
         command, argument = self._command(str(message.get("text", "")))
         if command in {"/news", "/news_unsubscribe"}:
             if private_user and approved and approved.get("can_control_home") and self._news_command is not None:
-                await self._news_command(chat_id, command)
+                await self._news_command(chat_id, command, argument)
             elif private_user:
                 await self._api.async_send_message(chat_id, "Для сводки нужно право общения с домом.")
             return

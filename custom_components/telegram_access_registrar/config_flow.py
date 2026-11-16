@@ -10,12 +10,14 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig
+from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig, TextSelector, TextSelectorConfig
 from homeassistant.util import dt as dt_util
 
 from . import request_log
 from .api import TelegramApi, TelegramApiError
 from .const import CONF_ADMIN_CHAT_ID, CONF_BOT_TOKEN, DOMAIN
+from .news import DEFAULT_NEWS_PROMPT
+from .registry import MAX_NEWS_PROMPT_LENGTH
 
 
 class TelegramAccessRegistrarConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -98,14 +100,67 @@ class RegistrarOptionsFlow(config_entries.OptionsFlow):
                 "journal": self.async_step_journal,
                 "administrator": self.async_step_administrator,
                 "users": self.async_step_users,
+                "news": self.async_step_news,
             }[user_input["section"]]()
         return self.async_show_form(
             step_id="init",
             data_schema=probatio.Schema({
                 probatio.Required("section"): SelectSelector(SelectSelectorConfig(
-                    options=["journal", "administrator", "users"], translation_key="options_section",
+                    options=["journal", "administrator", "users", "news"], translation_key="options_section",
                 )),
             }),
+        )
+
+    async def async_step_news(self, user_input=None):
+        runtime = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
+        if runtime is None:
+            return self.async_abort(reason="integration_unavailable")
+        registry = runtime["registry"]
+        subscribers = registry.news_subscribers()
+        if not subscribers:
+            return self.async_abort(reason="no_news_subscribers")
+        if user_input is not None:
+            self._news_chat_id = int(user_input["subscriber"])
+            return await self.async_step_news_prompt()
+        options = []
+        for chat_id in subscribers:
+            row = registry.get_approved(chat_id)
+            handle = f" (@{row['username']})" if row.get("username") else ""
+            label = f"{row.get('display_name') or 'Telegram'}{handle} · {chat_id}"
+            options.append({"value": str(chat_id), "label": label})
+        return self.async_show_form(
+            step_id="news",
+            data_schema=probatio.Schema({
+                probatio.Required("subscriber"): SelectSelector(SelectSelectorConfig(options=options)),
+            }),
+        )
+
+    async def async_step_news_prompt(self, user_input=None):
+        runtime = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
+        if runtime is None:
+            return self.async_abort(reason="integration_unavailable")
+        registry = runtime["registry"]
+        chat_id = self._news_chat_id
+        if chat_id not in registry.news_subscribers():
+            return self.async_abort(reason="news_subscription_gone")
+        prompt = registry.news_prompt(chat_id) or DEFAULT_NEWS_PROMPT
+        errors = {}
+        if user_input is not None:
+            prompt = (user_input.get("prompt") or "").strip()
+            if len(prompt) > MAX_NEWS_PROMPT_LENGTH:
+                errors["prompt"] = "news_prompt_too_long"
+            elif await registry.async_set_news_prompt(chat_id, "" if prompt == DEFAULT_NEWS_PROMPT else prompt):
+                return self.async_abort(reason="news_prompt_saved")
+            else:
+                return self.async_abort(reason="news_subscription_gone")
+        return self.async_show_form(
+            step_id="news_prompt",
+            data_schema=self.add_suggested_values_to_schema(
+                probatio.Schema({probatio.Optional("prompt"): TextSelector(TextSelectorConfig(multiline=True))}),
+                {"prompt": prompt},
+            ),
+            errors=errors,
+            description_placeholders={"chat_id": str(chat_id)},
         )
 
     async def async_step_administrator(self, user_input=None):

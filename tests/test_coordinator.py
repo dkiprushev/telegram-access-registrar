@@ -113,4 +113,4 @@ async def test_news_commands_require_private_chat_and_home_control():
     await send("group", "/news")
     handler.assert_not_awaited()
     await send("private", "/news")
-    handler.assert_awaited_once_with(2, "/news")
+    handler.assert_awaited_once_with(2, "/news", "")

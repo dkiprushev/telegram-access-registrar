@@ -47,6 +47,19 @@
           "user": "User",
           "action": "Action"
         }
+      },
+      "news": {
+        "title": "News subscribers",
+        "data": {
+          "subscriber": "Subscriber"
+        }
+      },
+      "news_prompt": {
+        "title": "Subscriber prompt",
+        "description": "Chat {chat_id}. Set topics, priorities and style. Clear the field to restore the default prompt.",
+        "data": {
+          "prompt": "News prompt"
+        }
       }
     },
     "abort": {
@@ -54,12 +67,16 @@
       "admin_saved": "Administrator chat ID saved.",
       "admin_saved_reload_failed": "The chat ID was saved. Reload the integration manually.",
       "integration_unavailable": "The integration is currently unavailable.",
-      "no_users": "No users yet."
+      "no_users": "No users yet.",
+      "no_news_subscribers": "No news subscribers yet.",
+      "news_subscription_gone": "The subscription is no longer active.",
+      "news_prompt_saved": "Prompt saved."
     },
     "error": {
       "invalid_chat_id": "Enter a valid numeric chat ID.",
       "protected_admin": "The current administrator is protected.",
-      "invalid_user_action": "This action is unavailable for that user."
+      "invalid_user_action": "This action is unavailable for that user.",
+      "news_prompt_too_long": "Maximum 3000 characters."
     }
   },
   "selector": {
@@ -67,7 +84,8 @@
       "options": {
         "journal": "Request log",
         "administrator": "Administrator",
-        "users": "Users"
+        "users": "Users",
+        "news": "News subscribers"
       }
     },
     "user_action": {

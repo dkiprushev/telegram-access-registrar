@@ -241,3 +241,40 @@ async def test_scheduled_bulletin_only_sends_to_current_subscribers(monkeypatch)
     assert result["status"] == "sent"
     telegram.async_send_voice.assert_awaited_once()
     assert telegram.async_send_voice.await_args.args == (789, VOICE)
+
+
+async def test_subscriber_prompts_are_isolated_and_shared_editions_are_generated_once(monkeypatch):
+    from telegram_access_registrar.registry import AccessRegistry
+
+    registry = AccessRegistry(SimpleNamespace(async_save=AsyncMock()))
+    for chat_id in (123, 456, 789):
+        await registry.async_ensure_admin(chat_id)
+    telegram = SimpleNamespace(async_send_voice=AsyncMock(), async_send_message=AsyncMock())
+    bulletin = news.NewsBulletin(None, None, telegram, 123, {"ai_task": "ai_task.test", "tts": {}})
+    await bulletin.handle_command(registry, 456, "/news", "Только архитектура")
+    assert registry.news_prompt(456) == "Только архитектура"
+    assert registry.news_prompt(123) == ""
+    telegram.async_send_voice.assert_not_awaited()
+
+    await registry.async_subscribe_to_news(123)
+    await registry.async_subscribe_to_news(789)
+    collect = AsyncMock(return_value=([article(0)], []))
+    write = AsyncMock(side_effect=[("Архитектура.", []), ("Новости.", [])])
+    synthesize = AsyncMock(side_effect=[(b"custom", 60), (b"default", 60)])
+    monkeypatch.setattr(news, "collect", collect)
+    monkeypatch.setattr(news, "write_script", write)
+    monkeypatch.setattr(news, "synthesize", synthesize)
+
+    await bulletin.run(
+        deliver=True, scheduled=True, recipients=registry.news_subscribers, prompt_for=registry.news_prompt,
+    )
+
+    collect.assert_awaited_once()
+    assert [entry.args[-1] for entry in write.await_args_list] == ["Только архитектура", news.DEFAULT_NEWS_PROMPT]
+    assert [entry.args for entry in telegram.async_send_voice.await_args_list] == [
+        (456, b"custom"), (123, b"default"), (789, b"default"),
+    ]
+
+    await bulletin.handle_command(registry, 456, "/news", "default")
+    assert registry.news_prompt(456) == ""
+    assert 456 in registry.news_subscribers()

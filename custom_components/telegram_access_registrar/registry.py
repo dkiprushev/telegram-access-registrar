@@ -4,6 +4,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Protocol
 
+MAX_NEWS_PROMPT_LENGTH = 3000
+
 
 class AsyncStore(Protocol):
     async def async_load(self) -> dict[str, Any] | None: ...
@@ -11,7 +13,7 @@ class AsyncStore(Protocol):
 
 
 def _empty() -> dict[str, Any]:
-    return {"version": 1, "approved": {}, "pending": {}, "news_subscribers": []}
+    return {"version": 1, "approved": {}, "pending": {}, "news_subscribers": [], "news_prompts": {}}
 
 
 class AccessRegistry:
@@ -116,6 +118,22 @@ class AccessRegistry:
             if self._data["approved"].get(str(chat_id), {}).get("can_control_home")
         )
 
+    def news_prompt(self, chat_id: int) -> str:
+        return self._data["news_prompts"].get(str(chat_id), "")
+
+    async def async_set_news_prompt(self, chat_id: int, prompt: str) -> bool:
+        if chat_id not in self.news_subscribers():
+            return False
+        prompt = prompt.strip()
+        if len(prompt) > MAX_NEWS_PROMPT_LENGTH:
+            raise ValueError("News prompt is too long")
+        if prompt:
+            self._data["news_prompts"][str(chat_id)] = prompt
+        else:
+            self._data["news_prompts"].pop(str(chat_id), None)
+        await self._save()
+        return True
+
     async def async_subscribe_to_news(self, chat_id: int) -> bool:
         """Subscribe an authorized chat. Return true for a new subscription."""
         if not self._data["approved"].get(str(chat_id), {}).get("can_control_home"):
@@ -131,6 +149,7 @@ class AccessRegistry:
         if chat_id not in subscribers:
             return False
         subscribers.remove(chat_id)
+        self._data["news_prompts"].pop(str(chat_id), None)
         return True
 
     async def async_unsubscribe_from_news(self, chat_id: int) -> bool:

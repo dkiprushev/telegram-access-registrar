@@ -99,8 +99,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             request_log.record, log_path, int(entry.data[CONF_ADMIN_CHAT_ID]), update
         )
 
-    async def news_command(chat_id: int, command: str) -> None:
-        await bulletin.handle_command(registry, chat_id, command)
+    async def news_command(chat_id: int, command: str, argument: str) -> None:
+        await bulletin.handle_command(registry, chat_id, command, argument)
 
     coordinator = RegistrarCoordinator(
         api,
@@ -123,7 +123,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if news_stopped:
             return
         cancel_news = async_track_point_in_utc_time(hass, scheduled_news, next_bulletin(datetime.now(UTC)))
-        await bulletin.run(deliver=True, scheduled=True, recipients=registry.news_subscribers)
+        await bulletin.run(
+            deliver=True, scheduled=True, recipients=registry.news_subscribers, prompt_for=registry.news_prompt,
+        )
 
     def stop_news() -> None:
         nonlocal news_stopped
@@ -228,7 +230,10 @@ def _async_register_services(hass: HomeAssistant) -> None:
         user = await hass.auth.async_get_user(user_id) if user_id else None
         if user is None or not user.is_admin:
             raise Unauthorized(context=call.context)
-        return await _runtime(hass)["news"].run(deliver=call.data["deliver"])
+        runtime = _runtime(hass)
+        return await runtime["news"].run(
+            deliver=call.data["deliver"], prompt_for=runtime["registry"].news_prompt,
+        )
 
     hass.services.async_register(
         DOMAIN, NEWS_SERVICE, news_now,
