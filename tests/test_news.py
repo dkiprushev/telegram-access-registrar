@@ -377,3 +377,20 @@ async def test_news_defaults_to_preferred_assist_voice_without_openai_key(monkey
     assert result["status"] == "preview"
     home_assistant.assert_awaited_once_with(hass, "ИИ. Выпуск.")
     telegram.async_send_voice.assert_not_awaited()
+
+
+async def test_script_retries_service_validation_as_plain_json_text():
+    class ServiceValidationError(Exception):
+        pass
+
+    call = AsyncMock(side_effect=[
+        ServiceValidationError("Structured output rejected"),
+        {"data": '[{"id": 0, "text": "Опубликовано исследование."}]'},
+    ])
+    hass = SimpleNamespace(services=SimpleNamespace(async_call=call))
+    material = article(0)
+    assert await news.write_script(hass, "ai_task.test", [material]) == (
+        "ИИ. Опубликовано исследование.", [material],
+    )
+    assert "structure" in call.await_args_list[0].args[2]
+    assert "structure" not in call.await_args_list[1].args[2]
