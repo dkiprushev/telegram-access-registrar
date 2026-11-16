@@ -22,12 +22,8 @@ class RegistrarCoordinator:
         registry: AccessRegistry,
         admin_chat_id: int,
         fire_access_event: Callable[[dict[str, Any]], None],
-        answer_inventory: Callable[[int, str], Awaitable[bool]],
-        propose_purchase: Callable[[str], Awaitable[list[dict[str, Any]]]],
-        add_stock: Callable[[list[dict[str, Any]]], Awaitable[tuple[list[str], list[str]]]],
-        propose_photo: Callable[[bytes, str], Awaitable[tuple[list[dict[str, Any]], str]]],
-        revise_photo: Callable[[list[dict[str, Any]], str], Awaitable[list[dict[str, Any]]]],
-        assist_reply: Callable[[int, str], Awaitable[bool]] | None = None,
+        add_stock: Callable[[list[dict[str, Any]]], Awaitable[tuple[list[str], list[str]]]] | None = None,
+        assist_reply: Callable[..., Awaitable[bool]] | None = None,
         log_request: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         confirm_change: Callable[[int, str, str, str], Awaitable[None]] | None = None,
     ) -> None:
@@ -35,10 +31,7 @@ class RegistrarCoordinator:
         self._registry = registry
         self._admin_chat_id = admin_chat_id
         self._fire_access_event = fire_access_event
-        self._answer_inventory = answer_inventory
-        self._propose_purchase, self._add_stock = propose_purchase, add_stock
-        self._propose_photo = propose_photo
-        self._revise_photo = revise_photo
+        self._add_stock = add_stock
         self._assist_reply = assist_reply
         self._log_request = log_request
         self._confirm_change = confirm_change
@@ -109,22 +102,6 @@ class RegistrarCoordinator:
         chat_id = int(chat["id"])
         private_user = chat.get("type") == "private" and user.get("id") == chat_id
         approved = self._registry.get_approved(chat_id)
-        photos = message.get("photo")
-        if private_user and approved and approved.get("can_control_home") and isinstance(photos, list) and photos:
-            photo = photos[-1]
-            if not isinstance(photo, dict) or not isinstance(photo.get("file_id"), str): return
-            try:
-                raw, _ = await self._api.async_download_file(photo["file_id"])
-                items, _ = await self._propose_photo(raw, str(message.get("caption", "")))
-            except Exception as err:
-                _LOGGER.exception("Photo inventory analysis failed for chat %s", chat_id)
-                await self._api.async_send_message(chat_id, f"Не смог разобрать фото (код: {type(err).__name__}).")
-                return
-            if not items:
-                await self._api.async_send_message(chat_id, "На фото не удалось уверенно распознать предметы.")
-                return
-            await self._send_draft(chat_id, items, "Черновик по фото. Можно уточнить обычным сообщением:")
-            return
         command, argument = self._command(str(message.get("text", "")))
         if command in {"/home_allow", "/home_revoke", "/home_users"}:
             if private_user and chat_id == self._admin_chat_id:
@@ -150,40 +127,27 @@ class RegistrarCoordinator:
         if command == COMMAND_ACCESS and user.get("id") == self._admin_chat_id:
             await self._async_request_access(argument)
             return
-        if private_user and approved and approved.get("can_control_home") and message.get("text"):
-            if command == "/assist" and self._assist_reply is not None:
-                try:
-                    if not await self._assist_reply(chat_id, argument):
-                        await self._api.async_send_message(chat_id, "Настрой разговорный агент conversation.smarthouse_telegram с инструментами SmartHouse Grocy.")
-                except Exception as err:
-                    _LOGGER.warning("Telegram Assist request failed: %s", type(err).__name__)
-                    await self._api.async_send_message(chat_id, "Не удалось получить ответ Codex Assist. Проверь настройки разговорного агента.")
-                return
+        photos = message.get("photo")
+        if private_user and approved and approved.get("can_control_home") and (message.get("text") or photos):
+            text = argument if command == "/assist" else str(message.get("text") or message.get("caption") or "")
+            photo_id = None
+            if isinstance(photos, list) and photos and isinstance(photos[-1], dict):
+                photo_id = photos[-1].get("file_id")
+            pending = self._pending_stock.get(chat_id)
+
+            async def show_draft(items, title):
+                await self._send_draft(chat_id, items, title)
+
             try:
-                text = str(message["text"])
-                pending = self._pending_stock.get(chat_id)
-                if pending and pending[1][0].get("photo") and not command.startswith("/") and chat.get("type") == "private" and user.get("id") == chat_id:
-                    revised = await self._revise_photo(pending[1], text)
-                    if revised:
-                        await self._send_draft(chat_id, revised, "Обновлённый черновик по фото:")
-                    else:
-                        await self._api.async_send_message(chat_id, "Не удалось применить уточнение. Текущий черновик сохранён.")
+                if self._assist_reply is not None and await self._assist_reply(
+                    chat_id, text, photo_id=photo_id, pending_items=pending[1] if pending else None,
+                    show_draft=show_draft,
+                ):
                     return
-                if text.casefold().startswith(("купил", "купила", "добавь", "добавил", "/add")):
-                    items = await self._propose_purchase(text)
-                    if not items:
-                        await self._api.async_send_message(chat_id, "Не увидел в сообщении понятных покупок. Напиши, например: «купил 2 пиццы и салфетки»." )
-                        return
-                    await self._send_draft(chat_id, items, "Черновик добавления в Grocy:")
-                    return
-                if await self._answer_inventory(chat_id, text):
-                    return
-                if self._assist_reply is not None and await self._assist_reply(chat_id, text):
-                    return
-                await self._api.async_send_message(chat_id, "Для этого вопроса нужен разговорный агент Home Assistant.")
-            except Exception as err:  # The bot must remain available if Grocy/AI is down.
-                _LOGGER.warning("Inventory question failed: %s", err)
-                await self._api.async_send_message(chat_id, "Не смог получить данные Grocy. Попробуйте ещё раз позже.")
+                await self._api.async_send_message(chat_id, "Настрой разговорный агент SmartHouse Telegram.")
+            except Exception as err:
+                _LOGGER.warning("SmartHouse conversation failed: %s", type(err).__name__)
+                await self._api.async_send_message(chat_id, "Не удалось обработать запрос SmartHouse.")
             return
         if chat_id != self._admin_chat_id:
             await self._api.async_send_message(chat_id, "Нажмите /start, чтобы отправить заявку на доступ.")

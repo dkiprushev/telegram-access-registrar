@@ -1,4 +1,4 @@
-"""Read Grocy and ask the configured AI Task to answer inventory questions."""
+"""Read Grocy, prepare drafts with AI Task, and apply confirmed changes."""
 from __future__ import annotations
 
 import asyncio
@@ -11,7 +11,7 @@ from uuid import uuid4
 
 
 class InventoryAssistant:
-    """A deliberately read-only bridge between Telegram, Grocy and AI Task."""
+    """Bridge between Telegram, Grocy and AI Task."""
 
     def __init__(self, hass) -> None:
         self._hass = hass
@@ -158,65 +158,12 @@ class InventoryAssistant:
             {"name": names.get(row.get("product_id"), ""), "amount": row.get("amount"), "done": bool(row.get("done") or row.get("done_date"))}
             for row in shopping if row.get("product_id") in names
         ]
-        return {"inventory": inventory[:500], "shopping_list": shopping_items[:250]}
+        snapshot = {"inventory": inventory[:500], "shopping_list": shopping_items[:250]}
+        if include_product_ids:
+            snapshot["locations"] = list(places.values())
+        return snapshot
 
-    async def async_inventory_reply(
-        self, question: str, *, previous: tuple[str, str] | None = None
-    ) -> tuple[str, set[int], dict | None]:
-        snapshot = await self.async_snapshot(include_product_ids=True)
-        locations = await self._grocy().async_list("locations")
-        context = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
-        instructions = (
-            "You are a home inventory assistant. Answer in Russian, briefly and helpfully. "
-            "Use ONLY the supplied Grocy snapshot: never invent stock. Include location and quantity when useful. "
-            "If requested item is absent, say so, then mention only genuinely relevant alternatives from the snapshot. "
-            "This is read-only: do not claim to add, remove, reserve, or buy anything.\n"
-            "Interpret 'есть', 'в наличии' and 'дома' as household stock. For broad requests list matches "
-            "without asking for a brand or model. For photo requests return the matching in-stock product IDs "
-            "with has_photo=true in photo_ids, and explain if no matches have photos. Use [] otherwise. "
-            "For requests clearly unrelated to inventory, return exactly NOT_INVENTORY as reply.\n"
-            "For an explicit request to change stock return change_json with kind transfer or quantity, "
-            "and product_id, source (exact location name), amount, and for transfer destination (exact name). "
-            "For quantity, amount is the new total at source. For transfer, amount is what actually moves. "
-            "If asked to put all units at the destination, leave those already there alone. "
-            "Propose only one change; ask for clarification if ambiguous. Use {} otherwise. "
-            "Never say a proposed change has already happened.\n"
-            f"Locations: {json.dumps([row['name'] for row in locations], ensure_ascii=False)}\n"
-            "Use the prior exchange only to resolve follow-ups. The snapshot has the current facts.\n"
-            f"Prior exchange: {json.dumps(previous, ensure_ascii=False)}\n"
-            f"Question: {question}\nGrocy snapshot: {context}"
-        )
-        result = await self._hass.services.async_call(
-            "ai_task", "generate_data",
-            {"entity_id": "ai_task.codex_assist_ai_task", "task_name": "Grocy inventory answer", "instructions": instructions,
-             "structure": {
-                 "reply": {"description": "Short Russian answer grounded in the snapshot, or NOT_INVENTORY", "required": True, "selector": {"text": {}}},
-                 "photo_ids": {"description": "JSON array of up to 10 integer product IDs to attach, or []", "required": True, "selector": {"text": {}}},
-                 "change_json": {"description": "One explicit stock change as JSON, or {}", "required": True, "selector": {"text": {}}},
-             }},
-            blocking=True, return_response=True,
-        )
-        data = result.get("data", {}) if isinstance(result, dict) else {}
-        reply = data.get("reply")
-        if not isinstance(reply, str) or not reply.strip():
-            raise ValueError("Codex Assist did not return an answer")
-        try:
-            selected = json.loads(data.get("photo_ids", "[]"))
-        except (TypeError, ValueError):
-            selected = []
-        available = {row["product_id"] for row in snapshot["inventory"] if row["has_photo"]}
-        photo_ids = {
-            item for item in (selected[:10] if isinstance(selected, list) else [])
-            if type(item) is int and item in available
-        }
-        change = json.loads(data.get("change_json", "{}"))
-        if change:
-            if not isinstance(change, dict):
-                raise ValueError("Invalid stock change")
-            change = await self._validate_change(change)
-        return reply.strip(), photo_ids, change or None
-
-    async def _validate_change(self, change: dict) -> dict:
+    async def async_validate_change(self, change: dict) -> dict:
         grocy = self._grocy()
         products, locations, stock = await asyncio.gather(
             grocy.async_list("products"), grocy.async_list("locations"), grocy.async_list("stock")
@@ -226,7 +173,9 @@ class InventoryAssistant:
             raise ValueError("Invalid stock operation")
         if type(amount) not in (int, float) or not math.isfinite(amount) or amount < 0 or amount > 100000:
             raise ValueError("Invalid stock amount")
-        product = next(row for row in products if int(row["id"]) == product_id)
+        product = next((row for row in products if int(row["id"]) == product_id), None)
+        if product is None:
+            raise ValueError("Unknown stock product")
         if str(product.get("enable_tare_weight_handling", 0)).lower() in {"1", "true"}:
             raise ValueError("Stock changes for tare-weight products are unsupported")
         places = {row["name"]: int(row["id"]) for row in locations}
@@ -249,7 +198,7 @@ class InventoryAssistant:
                     amount=amount, before=before, destination_before=destination_before)
 
     async def async_apply_change(self, draft: dict) -> bool:
-        current = await self._validate_change(draft)
+        current = await self.async_validate_change(draft)
         if current != draft:
             return False
         endpoint = f"/api/stock/products/{draft['product_id']}"

@@ -38,7 +38,7 @@ async def test_request_is_pending_once_and_can_be_approved():
     assert len(registry.snapshot()["pending"]) == 1
 
     approved = await registry.async_approve(42)
-    assert approved == {"chat_id": 42, "username": "visitor", "display_name": "Visitor"}
+    assert approved == {"chat_id": 42, "username": "visitor", "display_name": "Visitor", "can_control_home": False}
     assert registry.get_approved_by_username("@VISITOR") == approved
     assert registry.snapshot()["pending"] == []
 

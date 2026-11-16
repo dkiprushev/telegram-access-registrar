@@ -47,7 +47,7 @@ async def test_start_approval_and_access_command():
     assert api.answers == [("cb1", "Пользователь разрешён")]
 
     await coordinator.async_handle_update({"message": {"chat": {"id": 1}, "from": {"id": 1}, "text": "/access @ira"}})
-    assert events == [{"recipient": {"chat_id": 10, "username": "ira", "display_name": "Ira"}, "requested_by": 1}]
+    assert events == [{"recipient": {"chat_id": 10, "username": "ira", "display_name": "Ira", "can_control_home": False}, "requested_by": 1}]
 
 
 async def test_non_admin_cannot_request_access():
@@ -58,3 +58,33 @@ async def test_non_admin_cannot_request_access():
 
     await coordinator.async_handle_update({"message": {"chat": {"id": 10}, "from": {"id": 10}, "text": "/access @ira"}})
     assert "Нажмите /start" in api.messages[0][1]
+
+
+async def test_home_dialog_routes_photo_and_followups_to_same_agent():
+    api = FakeApi()
+    registry = AccessRegistry(MemoryStore())
+    turns = []
+
+    async def reply(chat_id, text, *, photo_id, **kwargs):
+        turns.append((chat_id, text, photo_id))
+        return True
+
+    coordinator = RegistrarCoordinator(api, registry, 1, lambda _: None, assist_reply=reply)
+    await registry.async_load()
+    await registry.async_ensure_admin(1)
+    message = {"chat": {"id": 1, "type": "private"}, "from": {"id": 1}}
+    for payload in (
+        {"text": "выключи свет"},
+        {"text": "везде"},
+        {"photo": [{"file_id": "example"}]},
+        {"text": "добавь на склад"},
+    ):
+        await coordinator.async_handle_update({"message": {**message, **payload}})
+
+    assert turns == [
+        (1, "выключи свет", None),
+        (1, "везде", None),
+        (1, "", "example"),
+        (1, "добавь на склад", None),
+    ]
+    assert not api.messages

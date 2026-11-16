@@ -75,11 +75,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         registry,
         int(entry.data[CONF_ADMIN_CHAT_ID]),
         lambda data: (hass.bus.async_fire(EVENT_ACCESS_REQUESTED, data), request_access(data)),
-        assist.async_inventory_reply, inventory.async_propose_purchase, inventory.async_add_stock, inventory.async_propose_photo_purchase,
-        inventory.async_revise_photo,
-        assist.async_reply,
-        log_request,
-        assist.async_confirm_change,
+        add_stock=inventory.async_add_stock,
+        assist_reply=assist.async_reply,
+        log_request=log_request,
+        confirm_change=assist.async_confirm_change,
     )
     await coordinator.async_start()
     await registry.async_ensure_admin(int(entry.data[CONF_ADMIN_CHAT_ID]))
@@ -90,7 +89,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "api": api,  # Kept runtime-only; never persisted.
     }
     _async_register_services(hass)
-    entry.async_on_unload(llm.async_register_api(hass, SmartHouseAPI(hass, inventory, entry.entry_id)))
+    entry.async_on_unload(llm.async_register_api(hass, SmartHouseAPI(hass, inventory, entry.entry_id, api)))
     return True
 
 
