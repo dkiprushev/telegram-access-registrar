@@ -159,24 +159,44 @@ class InventoryAssistant:
         ]
         return {"inventory": inventory[:500], "shopping_list": shopping_items[:250]}
 
-    async def async_answer(self, question: str) -> str:
-        context = json.dumps(await self.async_snapshot(), ensure_ascii=False, separators=(",", ":"))
+    async def async_inventory_reply(
+        self, question: str, *, previous: tuple[str, str] | None = None
+    ) -> tuple[str, set[int]]:
+        snapshot = await self.async_snapshot(include_product_ids=True)
+        context = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
         instructions = (
             "You are a home inventory assistant. Answer in Russian, briefly and helpfully. "
             "Use ONLY the supplied Grocy snapshot: never invent stock. Include location and quantity when useful. "
             "If requested item is absent, say so, then mention only genuinely relevant alternatives from the snapshot. "
             "This is read-only: do not claim to add, remove, reserve, or buy anything.\n"
-            "If asked for photos, say that photo delivery requires the SmartHouse Telegram conversation agent. "
-            "Do not infer whether photos exist from this text-only snapshot.\n"
+            "Interpret 'есть', 'в наличии' and 'дома' as household stock. For broad requests list matches "
+            "without asking for a brand or model. For photo requests return the matching in-stock product IDs "
+            "with has_photo=true in photo_ids, and explain if no matches have photos. Use [] otherwise. "
+            "For requests clearly unrelated to inventory, return exactly NOT_INVENTORY as reply.\n"
+            "Use the prior exchange only to resolve follow-ups. The snapshot has the current facts.\n"
+            f"Prior exchange: {json.dumps(previous, ensure_ascii=False)}\n"
             f"Question: {question}\nGrocy snapshot: {context}"
         )
         result = await self._hass.services.async_call(
             "ai_task", "generate_data",
             {"entity_id": "ai_task.codex_assist_ai_task", "task_name": "Grocy inventory answer", "instructions": instructions,
-             "structure": {"reply": {"description": "Short Russian answer grounded only in the snapshot", "required": True, "selector": {"text": {}}}}},
+             "structure": {
+                 "reply": {"description": "Short Russian answer grounded in the snapshot, or NOT_INVENTORY", "required": True, "selector": {"text": {}}},
+                 "photo_ids": {"description": "JSON array of up to 10 integer product IDs to attach, or []", "required": True, "selector": {"text": {}}},
+             }},
             blocking=True, return_response=True,
         )
-        reply = result.get("data", {}).get("reply") if isinstance(result, dict) else None
+        data = result.get("data", {}) if isinstance(result, dict) else {}
+        reply = data.get("reply")
         if not isinstance(reply, str) or not reply.strip():
             raise ValueError("Codex Assist did not return an answer")
-        return reply.strip()
+        try:
+            selected = json.loads(data.get("photo_ids", "[]"))
+        except (TypeError, ValueError):
+            selected = []
+        available = {row["product_id"] for row in snapshot["inventory"] if row["has_photo"]}
+        photo_ids = {
+            item for item in (selected[:10] if isinstance(selected, list) else [])
+            if type(item) is int and item in available
+        }
+        return reply.strip(), photo_ids

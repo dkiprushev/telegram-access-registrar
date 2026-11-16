@@ -67,6 +67,20 @@ class TelegramAssist:
         self.api = api
         self.inventory = inventory
         self.sessions: dict[int, str] = {}
+        self.inventory_context: dict[int, tuple[str, str]] = {}
+
+    async def async_inventory_reply(self, chat_id: int, question: str) -> bool:
+        reply, photo_ids = await self.inventory.async_inventory_reply(
+            question, previous=self.inventory_context.get(chat_id)
+        )
+        if reply == "NOT_INVENTORY":
+            self.inventory_context.pop(chat_id, None)
+            return False
+        self.inventory_context[chat_id] = (question[:1000], reply[:2000])
+        await self.api.async_send_message(chat_id, reply[:4000])
+        if photo_ids:
+            await self._send_photos(chat_id, photo_ids)
+        return True
 
     async def async_reply(self, chat_id: int, question: str) -> bool:
         if not question:

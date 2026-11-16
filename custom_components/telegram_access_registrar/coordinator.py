@@ -22,7 +22,7 @@ class RegistrarCoordinator:
         registry: AccessRegistry,
         admin_chat_id: int,
         fire_access_event: Callable[[dict[str, Any]], None],
-        answer_inventory: Callable[[str], Awaitable[str]],
+        answer_inventory: Callable[[int, str], Awaitable[bool]],
         propose_purchase: Callable[[str], Awaitable[list[dict[str, Any]]]],
         add_stock: Callable[[list[dict[str, Any]]], Awaitable[tuple[list[str], list[str]]]],
         propose_photo: Callable[[bytes, str], Awaitable[tuple[list[dict[str, Any]], str]]],
@@ -167,18 +167,14 @@ class RegistrarCoordinator:
                         return
                     await self._send_draft(chat_id, items, "Черновик добавления в Grocy:")
                     return
-                if self._assist_reply is not None and not command.startswith("/"):
-                    try:
-                        if await self._assist_reply(chat_id, text):
-                            return
-                    except Exception as err:
-                        _LOGGER.warning("Telegram Assist request failed: %s", type(err).__name__)
-                answer = await self._answer_inventory(text)
+                if await self._answer_inventory(chat_id, text):
+                    return
+                if self._assist_reply is not None and await self._assist_reply(chat_id, text):
+                    return
+                await self._api.async_send_message(chat_id, "Для этого вопроса нужен разговорный агент Home Assistant.")
             except Exception as err:  # The bot must remain available if Grocy/AI is down.
                 _LOGGER.warning("Inventory question failed: %s", err)
                 await self._api.async_send_message(chat_id, "Не смог получить данные Grocy. Попробуйте ещё раз позже.")
-            else:
-                await self._api.async_send_message(chat_id, answer[:4000])
             return
         if chat_id != self._admin_chat_id:
             await self._api.async_send_message(chat_id, "Нажмите /start, чтобы отправить заявку на доступ.")
