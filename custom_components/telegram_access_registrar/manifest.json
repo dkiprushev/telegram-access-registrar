@@ -1,7 +1,7 @@
 {
   "domain": "telegram_access_registrar",
   "name": "Telegram Access Registrar",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "config_flow": true,
   "documentation": "https://github.com/dkiprushev/telegram-access-registrar",
   "issue_tracker": "https://github.com/dkiprushev/telegram-access-registrar/issues",

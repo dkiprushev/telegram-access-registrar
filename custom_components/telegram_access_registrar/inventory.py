@@ -14,6 +14,9 @@ class InventoryAssistant:
     def __init__(self, hass) -> None:
         self._hass = hass
 
+    def _photo_path(self, filename: str) -> Path:
+        return Path(self._hass.config.media_dirs["local"], filename)
+
     def _grocy(self):
         runtimes = list(self._hass.data.get("hisense_food_manager", {}).values())
         if len(runtimes) != 1 or "grocy" not in runtimes[0]:
@@ -26,7 +29,7 @@ class InventoryAssistant:
         locations = await grocy.async_list("locations")
         location_names = [str(row["name"]) for row in locations if row.get("name")]
         filename = f"telegram_access_registrar/{uuid4().hex}.jpg"
-        target = Path(self._hass.config.path("media", filename))
+        target = self._photo_path(filename)
         await self._hass.async_add_executor_job(target.parent.mkdir, 0o755, True, True)
         await self._hass.async_add_executor_job(target.write_bytes, image)
         result = await self._hass.services.async_call(
@@ -99,7 +102,7 @@ class InventoryAssistant:
                 product_ids[item["name"].casefold()] = product_id
             await grocy._request("POST", f"/api/stock/products/{product_id}/add", json={"amount": item["amount"], "location_id": location_id})
             if item.get("photo"):
-                source = Path(self._hass.config.path("media", item["photo"]))
+                source = self._photo_path(item["photo"])
                 image = await self._hass.async_add_executor_job(source.read_bytes)
                 picture_name = Path(item["photo"]).name
                 async with grocy._session.put(grocy._url(f"/api/files/productpictures/{picture_name}"), headers=grocy._headers, data=image) as response:
