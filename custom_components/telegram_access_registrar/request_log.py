@@ -4,6 +4,12 @@ from datetime import datetime, timezone
 import json
 import sqlite3
 
+from .const import DOMAIN
+
+
+def storage_path(config, entry_id):
+    return config.path(".storage", f"{DOMAIN}.{entry_id}.requests.sqlite")
+
 
 def _connect(path):
     db = sqlite3.connect(path)

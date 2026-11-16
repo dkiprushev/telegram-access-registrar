@@ -16,5 +16,26 @@
     "abort": {
       "already_configured": "Этот Telegram-бот уже настроен."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Журнал запросов",
+        "menu_options": {
+          "request_log": "Журнал запросов"
+        }
+      },
+      "request_log": {
+        "title": "Журнал запросов",
+        "description": "Сначала новые записи. Оставьте Chat ID пустым для всех чатов. Нажмите «Отправить», чтобы обновить журнал или применить фильтр.\n\n{requests}",
+        "data": {
+          "chat_id": "Chat ID",
+          "older": "Показать более ранние запросы"
+        }
+      }
+    },
+    "abort": {
+      "request_log_unavailable": "Не удалось прочитать журнал запросов."
+    }
   }
 }

@@ -16,5 +16,26 @@
     "abort": {
       "already_configured": "This Telegram bot is already configured."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Request log",
+        "menu_options": {
+          "request_log": "Request log"
+        }
+      },
+      "request_log": {
+        "title": "Request log",
+        "description": "Most recent first. Leave Chat ID blank to see all chats. Press Submit to refresh or apply the filter.\n\n{requests}",
+        "data": {
+          "chat_id": "Chat ID",
+          "older": "Show older requests"
+        }
+      }
+    },
+    "abort": {
+      "request_log_unavailable": "Unable to read the request log."
+    }
   }
 }

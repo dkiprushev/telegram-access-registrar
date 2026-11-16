@@ -63,7 +63,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     inventory = InventoryAssistant(hass)
     assist = TelegramAssist(hass, api, inventory)
-    log_path = hass.config.path(".storage", f"{DOMAIN}.{entry.entry_id}.requests.sqlite")
+    log_path = request_log.storage_path(hass.config, entry.entry_id)
 
     async def log_request(update: dict[str, Any]) -> None:
         await hass.async_add_executor_job(
