@@ -250,7 +250,9 @@ def count_words(script: str) -> int:
     return len(re.findall(r"[^\W_]+(?:[-‑][^\W_]+)*", script))
 
 
-def build_script(raw: str | list, articles: list[Article]) -> tuple[str, list[Article]]:
+def build_script(
+    raw: str | list, articles: list[Article], *, trim_to_budget: bool = False,
+) -> tuple[str, list[Article]]:
     if isinstance(raw, str):
         raw = raw.strip()
         fenced = re.fullmatch(r"```(?:json)?\s*\n(.*?)\n```", raw, re.I | re.S)
@@ -262,6 +264,7 @@ def build_script(raw: str | list, articles: list[Article]) -> tuple[str, list[Ar
     blocks = {section: [] for section in SECTIONS}
     selected = []
     used_ids = set()
+    budget_used = 0
     for story in stories:
         if not isinstance(story, dict) or type(story.get("id")) is not int or not isinstance(story.get("text"), str):
             raise ValueError("Invalid story")
@@ -274,10 +277,17 @@ def build_script(raw: str | list, articles: list[Article]) -> tuple[str, list[Ar
         if article.source.section == "Украина":
             attribution = "По сообщению издания «Страна»" if article.source.channel == "stranaua" else "По сообщению Анатолия Шария"
             prose = f"{attribution}, {prose.rstrip('.')}."
-        blocks[article.source.section].append(prose)
+        section = article.source.section
+        cost = count_words(prose) + (0 if blocks[section] else count_words(section))
+        if trim_to_budget and budget_used + cost > 145:
+            continue
+        budget_used += cost
+        blocks[section].append(prose)
         selected.append(article)
 
     if not selected:
+        if stories:
+            raise ValueError("Bulletin exceeds 145 words")
         return "В доступных публикациях за последние сутки не нашлось новостей для сегодняшней сводки.", []
     script = "\n\n".join(f"{section}. {' '.join(blocks[section])}" for section in SECTIONS if blocks[section])
     if count_words(script) > 145:
@@ -350,7 +360,9 @@ async def write_script(
         except Exception as err:
             raise ScriptError(f"AI Task did not complete ({type(err).__name__})") from err
         try:
-            script, selected = build_script(result["data"]["stories_json"], articles)
+            script, selected = build_script(
+                result["data"]["stories_json"], articles, trim_to_budget=bool(attempt),
+            )
             allowed = {id(articles[index]) for index in supplied_ids}
             if any(id(article) not in allowed for article in selected):
                 raise ValueError("Story was not supplied to AI Task")
@@ -589,12 +601,14 @@ class NewsBulletin:
                 message = f"Голосовая сводка не отправлена. Ошибка на этапе «{stage}»."
                 if isinstance(err, SpeechError):
                     message += f" {detail}"
+                elif isinstance(err, ScriptError):
+                    message += f"\n{detail}"
                 await self._notify(message)
                 if recipients is not None and len(targets) == 1 and targets[0] != self.admin_chat_id:
                     if targets[0] in recipients():
                         await self._notify(message, targets[0])
             result = {"status": "error", "stage": stage}
-            if isinstance(err, SpeechError):
+            if isinstance(err, (ScriptError, SpeechError)):
                 result["detail"] = detail
             return result
 

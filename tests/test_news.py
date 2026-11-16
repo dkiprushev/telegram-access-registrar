@@ -360,3 +360,13 @@ async def test_home_assistant_tts_uses_assist_voice_and_validates_opus(monkeypat
     pipeline.tts_engine = None
     with pytest.raises(news.SpeechError, match="не выбран синтезатор"):
         await news.synthesize_with_home_assistant(hass, {}, "Новости.")
+
+
+def test_script_length_fallback_keeps_complete_stories_and_matching_sources():
+    articles = [article(0), article(3)]
+    stories = [{"id": 0, "text": "слово " * 140}, {"id": 1, "text": "заявление о переговорах."}]
+    with pytest.raises(ValueError, match="145"):
+        news.build_script(stories, articles)
+    script, selected = news.build_script(stories, articles, trim_to_budget=True)
+    assert news.count_words(script) == 141
+    assert selected == [articles[0]]
