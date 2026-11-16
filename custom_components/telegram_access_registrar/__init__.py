@@ -57,12 +57,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
         )
 
+    inventory = InventoryAssistant(hass)
     coordinator = RegistrarCoordinator(
         api,
         registry,
         int(entry.data[CONF_ADMIN_CHAT_ID]),
         lambda data: (hass.bus.async_fire(EVENT_ACCESS_REQUESTED, data), request_access(data)),
-        InventoryAssistant(hass).async_answer,
+        inventory.async_answer, inventory.async_propose_purchase, inventory.async_add_stock,
     )
     await coordinator.async_start()
     await registry.async_ensure_admin(int(entry.data[CONF_ADMIN_CHAT_ID]))

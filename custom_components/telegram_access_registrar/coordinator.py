@@ -22,12 +22,16 @@ class RegistrarCoordinator:
         admin_chat_id: int,
         fire_access_event: Callable[[dict[str, Any]], None],
         answer_inventory: Callable[[str], Awaitable[str]],
+        propose_purchase: Callable[[str], Awaitable[list[dict[str, Any]]]],
+        add_stock: Callable[[list[dict[str, Any]]], Awaitable[list[str]]],
     ) -> None:
         self._api = api
         self._registry = registry
         self._admin_chat_id = admin_chat_id
         self._fire_access_event = fire_access_event
         self._answer_inventory = answer_inventory
+        self._propose_purchase, self._add_stock = propose_purchase, add_stock
+        self._pending_stock: dict[int, list[dict[str, Any]]] = {}
         self._offset: int | None = None
         self._task: asyncio.Task[None] | None = None
 
@@ -100,7 +104,17 @@ class RegistrarCoordinator:
         approved = self._registry.get_approved(chat_id)
         if approved and approved.get("can_control_home") and message.get("text"):
             try:
-                answer = await self._answer_inventory(str(message["text"]))
+                text = str(message["text"])
+                if text.casefold().startswith(("купил", "купила", "добавь", "добавил", "/add")):
+                    items = await self._propose_purchase(text)
+                    if not items:
+                        await self._api.async_send_message(chat_id, "Не увидел в сообщении понятных покупок. Напиши, например: «купил 2 пиццы и салфетки»." )
+                        return
+                    self._pending_stock[chat_id] = items
+                    draft = "\n".join(f"• {x['name']} — {x['amount']:g}, {x['location']}" for x in items)
+                    await self._api.async_send_message(chat_id, f"Черновик добавления в Grocy:\n{draft}\n\nПодтвердить?", [[{"text":"Добавить", "callback_data":"tar:stock_add"},{"text":"Отмена", "callback_data":"tar:stock_cancel"}]])
+                    return
+                answer = await self._answer_inventory(text)
             except Exception as err:  # The bot must remain available if Grocy/AI is down.
                 _LOGGER.warning("Inventory question failed: %s", err)
                 await self._api.async_send_message(chat_id, "Не смог получить данные Grocy. Попробуйте ещё раз позже.")
@@ -124,7 +138,26 @@ class RegistrarCoordinator:
         sender = callback.get("from")
         callback_id = callback.get("id")
         data = callback.get("data")
-        if not isinstance(sender, dict) or sender.get("id") != self._admin_chat_id or not isinstance(callback_id, str):
+        if not isinstance(sender, dict) or not isinstance(callback_id, str):
+            return
+        sender_id = int(sender.get("id", 0))
+        if data in {"tar:stock_add", "tar:stock_cancel"}:
+            items = self._pending_stock.pop(sender_id, None)
+            if not items or not self._registry.get_approved(sender_id):
+                await self._api.async_answer_callback(callback_id, "Черновик больше недоступен")
+                return
+            if data == "tar:stock_cancel":
+                await self._api.async_answer_callback(callback_id, "Отменено")
+                return
+            try: added = await self._add_stock(items)
+            except Exception as err:
+                _LOGGER.warning("Grocy stock add failed: %s", err)
+                await self._api.async_answer_callback(callback_id, "Не удалось добавить")
+            else:
+                await self._api.async_send_message(sender_id, "Добавлено в Grocy:\n" + "\n".join(f"• {x}" for x in added))
+                await self._api.async_answer_callback(callback_id, "Добавлено")
+            return
+        if sender_id != self._admin_chat_id:
             return
         try:
             prefix, decision, raw_chat_id = str(data).split(":", 2)
