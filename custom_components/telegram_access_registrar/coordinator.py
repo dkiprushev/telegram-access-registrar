@@ -190,16 +190,19 @@ class RegistrarCoordinator:
             if action == "stock_cancel":
                 await self._api.async_answer_callback(callback_id, "Отменено")
                 return
+            try:
+                await self._api.async_answer_callback(callback_id, "Добавляю в Grocy…")
+            except TelegramApiError:
+                _LOGGER.debug("Telegram could not acknowledge the stock confirmation")
             try: added, removed = await self._add_stock(items)
             except Exception as err:
                 _LOGGER.warning("Grocy stock add failed: %s", err)
-                await self._api.async_answer_callback(callback_id, "Не удалось добавить")
+                await self._api.async_send_message(sender_id, "Импорт остановился с ошибкой. Часть позиций могла сохраниться. Проверь остатки Grocy перед повтором.")
             else:
                 text = "Добавлено в Grocy:\n" + "\n".join(f"• {x}" for x in added)
                 if removed:
                     text += "\n\nУдалено из списка покупок:\n" + "\n".join(f"• {x}" for x in removed)
                 await self._api.async_send_message(sender_id, text)
-                await self._api.async_answer_callback(callback_id, "Добавлено")
             return
         if sender_id != self._admin_chat_id:
             return

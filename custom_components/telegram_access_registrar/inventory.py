@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from base64 import b64encode
 import json
 from pathlib import Path
 from typing import Any
@@ -105,21 +106,23 @@ class InventoryAssistant:
         location_ids = {str(row["name"]): int(row["id"]) for row in locations if row.get("id") is not None}
         product_ids = {str(row["name"]).casefold(): int(row["id"]) for row in products if row.get("id") is not None and row.get("name")}
         added, purchased_ids = [], {}
+        pictures = {}
+        for filename in dict.fromkeys(item["photo"] for item in items if item.get("photo")):
+            source = self._photo_path(filename)
+            image = await self._hass.async_add_executor_job(source.read_bytes)
+            picture_name = Path(filename).name
+            encoded_name = b64encode(picture_name.encode()).decode("ascii")
+            await grocy._request("PUT", f"/api/files/productpictures/{encoded_name}", data=image)
+            pictures[filename] = picture_name
         for item in items:
             location_id = location_ids[item["location"]]
             product_id = product_ids.get(item["name"].casefold())
             if product_id is None:
                 product_id = await grocy.async_create("products", {"name": item["name"], "location_id": location_id, "qu_id_purchase": units[0]["id"], "qu_id_stock": units[0]["id"], "min_stock_amount": 0})
                 product_ids[item["name"].casefold()] = product_id
-            await grocy._request("POST", f"/api/stock/products/{product_id}/add", json={"amount": item["amount"], "location_id": location_id})
             if item.get("photo"):
-                source = self._photo_path(item["photo"])
-                image = await self._hass.async_add_executor_job(source.read_bytes)
-                picture_name = Path(item["photo"]).name
-                async with grocy._session.put(grocy._url(f"/api/files/productpictures/{picture_name}"), headers=grocy._headers, data=image) as response:
-                    if response.status >= 400:
-                        raise ValueError("Grocy не принял фотографию товара")
-                await grocy._request("PUT", f"/api/objects/products/{product_id}", json={"picture_file_name": picture_name})
+                await grocy._request("PUT", f"/api/objects/products/{product_id}", json={"picture_file_name": pictures[item["photo"]]})
+            await grocy._request("POST", f"/api/stock/products/{product_id}/add", json={"amount": item["amount"], "location_id": location_id})
             purchased_ids[product_id] = item["name"]
             added.append(f"{item['name']} — {item['amount']:g} ({item['location']})")
         shopping = await grocy.async_list("shopping_list")
