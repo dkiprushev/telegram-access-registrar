@@ -1,0 +1,82 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Telegram Access Registrar",
+        "description": "Use the existing SmartHouse bot token. After this integration is configured, remove the core Telegram bot integration that polls this token. The administrator must already have started the bot.",
+        "data": {
+          "bot_token": "Bot token",
+          "admin_chat_id": "Administrator chat ID"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to validate the Telegram bot token."
+    },
+    "abort": {
+      "already_configured": "This Telegram bot is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "SmartHouse settings",
+        "data": {
+          "section": "Section"
+        }
+      },
+      "journal": {
+        "title": "Request log",
+        "description": "Most recent first. Leave Chat ID blank to see all chats. Press Submit to refresh or apply the filter.\n\n{requests}",
+        "data": {
+          "chat_id": "Chat ID",
+          "older": "Show older requests"
+        }
+      },
+      "administrator": {
+        "title": "Administrator",
+        "description": "Enter the administrator’s private chat ID. The new administrator should start the bot first.",
+        "data": {
+          "chat_id": "Administrator chat ID"
+        }
+      },
+      "users": {
+        "title": "Users",
+        "description": "**Administrator**\n\n{administrator}\n\n**Home control allowed**\n\n{allowed}\n\n**Registered without home control**\n\n{registered}\n\n**Awaiting approval**\n\n{pending}",
+        "data": {
+          "user": "User",
+          "action": "Action"
+        }
+      }
+    },
+    "abort": {
+      "request_log_unavailable": "Unable to read the request log.",
+      "admin_saved": "Administrator chat ID saved.",
+      "admin_saved_reload_failed": "The chat ID was saved. Reload the integration manually.",
+      "integration_unavailable": "The integration is currently unavailable.",
+      "no_users": "No users yet."
+    },
+    "error": {
+      "invalid_chat_id": "Enter a valid numeric chat ID.",
+      "protected_admin": "The current administrator is protected.",
+      "invalid_user_action": "This action is unavailable for that user."
+    }
+  },
+  "selector": {
+    "options_section": {
+      "options": {
+        "journal": "Request log",
+        "administrator": "Administrator",
+        "users": "Users"
+      }
+    },
+    "user_action": {
+      "options": {
+        "allow": "Allow home control",
+        "revoke": "Revoke home control",
+        "approve": "Approve registration",
+        "remove": "Remove registration or reject request"
+      }
+    }
+  }
+}

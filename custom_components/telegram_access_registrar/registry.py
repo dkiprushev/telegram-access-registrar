@@ -79,6 +79,11 @@ class AccessRegistry:
         await self._save()
         return deepcopy(identity)
 
+    async def async_remove_approved(self, chat_id: int) -> None:
+        """Remove registration and its associated home control permission."""
+        if self._data["approved"].pop(str(chat_id), None) is not None:
+            await self._save()
+
     async def async_reject(self, chat_id: int) -> dict[str, Any] | None:
         identity = self._data["pending"].pop(str(chat_id), None)
         if identity is not None:

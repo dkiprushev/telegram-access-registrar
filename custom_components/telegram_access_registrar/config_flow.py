@@ -10,6 +10,7 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig
 from homeassistant.util import dt as dt_util
 
 from . import request_log
@@ -24,7 +25,7 @@ class TelegramAccessRegistrarConfigFlow(config_entries.ConfigFlow, domain=DOMAIN
 
     @staticmethod
     def async_get_options_flow(config_entry):
-        return RequestLogOptionsFlow()
+        return RegistrarOptionsFlow()
 
     async def async_step_user(self, user_input=None):
         errors: dict[str, str] = {}
@@ -84,14 +85,123 @@ def _attachment_label(message):
     return "—"
 
 
-class RequestLogOptionsFlow(config_entries.OptionsFlow):
-    """Browse the journal through the administrator-only options flow."""
+class RegistrarOptionsFlow(config_entries.OptionsFlow):
+    """Manage this bot through the administrator-only options flow."""
 
     _chat_id = None
     _before_id = None
     _next_before_id = None
 
     async def async_step_init(self, user_input=None):
+        if user_input is not None:
+            return await {
+                "journal": self.async_step_journal,
+                "administrator": self.async_step_administrator,
+                "users": self.async_step_users,
+            }[user_input["section"]]()
+        return self.async_show_form(
+            step_id="init",
+            data_schema=probatio.Schema({
+                probatio.Required("section"): SelectSelector(SelectSelectorConfig(
+                    options=["journal", "administrator", "users"], translation_key="options_section",
+                )),
+            }),
+        )
+
+    async def async_step_administrator(self, user_input=None):
+        entry = self.config_entry
+        chat_id_input = str(entry.data[CONF_ADMIN_CHAT_ID])
+        errors = {}
+        if user_input is not None:
+            chat_id_input = user_input["chat_id"].strip()
+            try:
+                chat_id = int(chat_id_input)
+                if not 0 < chat_id < 2**63:
+                    raise ValueError("Invalid private Telegram chat ID")
+            except ValueError:
+                errors["chat_id"] = "invalid_chat_id"
+            else:
+                if chat_id != entry.data[CONF_ADMIN_CHAT_ID]:
+                    self.hass.config_entries.async_update_entry(
+                        entry, data={**entry.data, CONF_ADMIN_CHAT_ID: chat_id}
+                    )
+                    if not await self.hass.config_entries.async_reload(entry.entry_id):
+                        return self.async_abort(reason="admin_saved_reload_failed")
+                return self.async_abort(reason="admin_saved")
+
+        return self.async_show_form(
+            step_id="administrator",
+            data_schema=self.add_suggested_values_to_schema(
+                probatio.Schema({probatio.Required("chat_id"): str}), {"chat_id": chat_id_input}
+            ),
+            errors=errors,
+        )
+
+    async def async_step_users(self, user_input=None):
+        entry = self.config_entry
+        runtime = self.hass.data.get(DOMAIN, {}).get(entry.entry_id)
+        if runtime is None:
+            return self.async_abort(reason="integration_unavailable")
+        registry = runtime["registry"]
+        snapshot = registry.snapshot()
+        admin = int(entry.data[CONF_ADMIN_CHAT_ID])
+        approved = {row["chat_id"]: row for row in snapshot["approved"]}
+        pending = {row["chat_id"]: row for row in snapshot["pending"]}
+        errors = {}
+        if user_input is not None:
+            chat_id = int(user_input["user"])
+            action = user_input["action"]
+            if chat_id == admin:
+                errors["user"] = "protected_admin"
+            elif chat_id in approved and action in ("allow", "revoke"):
+                await registry.async_set_home_control(chat_id, action == "allow")
+                return await self.async_step_users()
+            elif chat_id in approved and action == "remove":
+                await registry.async_remove_approved(chat_id)
+                return await self.async_step_users()
+            elif chat_id in pending and action == "approve":
+                await registry.async_approve(chat_id)
+                return await self.async_step_users()
+            elif chat_id in pending and action == "remove":
+                await registry.async_reject(chat_id)
+                return await self.async_step_users()
+            else:
+                errors["action"] = "invalid_user_action"
+
+        options = []
+        for row in [*approved.values(), *pending.values()]:
+            chat_id = row["chat_id"]
+            label = row.get("display_name") or str(chat_id)
+            if row.get("username"):
+                label += f" (@{row['username']})"
+            options.append({"value": str(chat_id), "label": f"{label} · {chat_id}"})
+        if not options:
+            return self.async_abort(reason="no_users")
+
+        sections = {"administrator": [], "allowed": [], "registered": [], "pending": []}
+        for option in options:
+            chat_id = int(option["value"])
+            if chat_id == admin:
+                section = "administrator"
+            elif chat_id in pending:
+                section = "pending"
+            else:
+                section = "allowed" if approved[chat_id].get("can_control_home") else "registered"
+            label = " ".join(option["label"].split()).translate(_MARKDOWN_ESCAPES)
+            sections[section].append(label)
+        return self.async_show_form(
+            step_id="users",
+            data_schema=probatio.Schema({
+                probatio.Required("user"): SelectSelector(SelectSelectorConfig(options=options)),
+                probatio.Required("action"): SelectSelector(SelectSelectorConfig(
+                    options=["allow", "revoke", "approve", "remove"], translation_key="user_action",
+                )),
+            }),
+            errors=errors,
+            description_placeholders={key: ", ".join(labels) or "—" for key, labels in sections.items()},
+        )
+
+    async def async_step_journal(self, user_input=None):
         errors = {}
         chat_id_input = str(self._chat_id) if self._chat_id is not None else ""
         if user_input is not None:
@@ -122,7 +232,7 @@ class RequestLogOptionsFlow(config_entries.OptionsFlow):
         if self._next_before_id is not None:
             fields[probatio.Optional("older", default=False)] = bool
         return self.async_show_form(
-            step_id="init",
+            step_id="journal",
             errors=errors,
             data_schema=self.add_suggested_values_to_schema(
                 probatio.Schema(fields), {"chat_id": chat_id_input} if chat_id_input else {}

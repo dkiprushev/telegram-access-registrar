@@ -20,19 +20,63 @@
   "options": {
     "step": {
       "init": {
+        "title": "Настройки SmartHouse",
+        "data": {
+          "section": "Раздел"
+        }
+      },
+      "journal": {
         "title": "Журнал запросов",
         "description": "Сначала новые записи. Оставьте Chat ID пустым для всех чатов. Нажмите «Отправить», чтобы обновить журнал или применить фильтр.\n\n{requests}",
         "data": {
           "chat_id": "Chat ID",
           "older": "Показать более ранние запросы"
         }
+      },
+      "administrator": {
+        "title": "Администратор",
+        "description": "Укажи ID личного чата администратора. Новый администратор должен предварительно нажать Start у бота.",
+        "data": {
+          "chat_id": "Chat ID администратора"
+        }
+      },
+      "users": {
+        "title": "Пользователи",
+        "description": "**Администратор**\n\n{administrator}\n\n**Общение с домом разрешено**\n\n{allowed}\n\n**Зарегистрированы без доступа к дому**\n\n{registered}\n\n**Ожидают одобрения**\n\n{pending}",
+        "data": {
+          "user": "Пользователь",
+          "action": "Действие"
+        }
       }
     },
     "abort": {
-      "request_log_unavailable": "Не удалось прочитать журнал запросов."
+      "request_log_unavailable": "Не удалось прочитать журнал запросов.",
+      "admin_saved": "Chat ID администратора сохранён.",
+      "admin_saved_reload_failed": "Chat ID сохранён. Перезагрузи интеграцию вручную.",
+      "integration_unavailable": "Интеграция сейчас недоступна.",
+      "no_users": "Пользователей пока нет."
     },
     "error": {
-      "invalid_chat_id": "Введите числовой Chat ID."
+      "invalid_chat_id": "Введите числовой Chat ID.",
+      "protected_admin": "Права действующего администратора защищены.",
+      "invalid_user_action": "Это действие недоступно для выбранного пользователя."
+    }
+  },
+  "selector": {
+    "options_section": {
+      "options": {
+        "journal": "Журнал запросов",
+        "administrator": "Администратор",
+        "users": "Пользователи"
+      }
+    },
+    "user_action": {
+      "options": {
+        "allow": "Разрешить общение с домом",
+        "revoke": "Отозвать доступ к дому",
+        "approve": "Одобрить регистрацию",
+        "remove": "Удалить регистрацию или отклонить заявку"
+      }
     }
   }
 }
