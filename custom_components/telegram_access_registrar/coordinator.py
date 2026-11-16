@@ -24,6 +24,7 @@ class RegistrarCoordinator:
         answer_inventory: Callable[[str], Awaitable[str]],
         propose_purchase: Callable[[str], Awaitable[list[dict[str, Any]]]],
         add_stock: Callable[[list[dict[str, Any]]], Awaitable[tuple[list[str], list[str]]]],
+        propose_photo: Callable[[bytes, str], Awaitable[tuple[list[dict[str, Any]], str]]],
     ) -> None:
         self._api = api
         self._registry = registry
@@ -31,6 +32,7 @@ class RegistrarCoordinator:
         self._fire_access_event = fire_access_event
         self._answer_inventory = answer_inventory
         self._propose_purchase, self._add_stock = propose_purchase, add_stock
+        self._propose_photo = propose_photo
         self._pending_stock: dict[int, list[dict[str, Any]]] = {}
         self._offset: int | None = None
         self._task: asyncio.Task[None] | None = None
@@ -80,6 +82,25 @@ class RegistrarCoordinator:
         if not isinstance(chat, dict) or not isinstance(user, dict) or not isinstance(chat.get("id"), int):
             return
         chat_id = int(chat["id"])
+        approved = self._registry.get_approved(chat_id)
+        photos = message.get("photo")
+        if approved and approved.get("can_control_home") and isinstance(photos, list) and photos:
+            photo = photos[-1]
+            if not isinstance(photo, dict) or not isinstance(photo.get("file_id"), str): return
+            try:
+                raw, _ = await self._api.async_download_file(photo["file_id"])
+                items, _ = await self._propose_photo(raw, str(message.get("caption", "")))
+            except Exception as err:
+                _LOGGER.warning("Photo inventory analysis failed: %s", err)
+                await self._api.async_send_message(chat_id, "Не смог разобрать фото. Попробуйте ещё раз.")
+                return
+            if not items:
+                await self._api.async_send_message(chat_id, "На фото не удалось уверенно распознать предметы.")
+                return
+            self._pending_stock[chat_id] = items
+            draft = "\n".join(f"• {x['name']} — {x['amount']:g}, {x['location']}" for x in items)
+            await self._api.async_send_message(chat_id, f"Черновик по фото:\n{draft}\n\nПодтвердить добавление?", [[{"text":"Добавить", "callback_data":"tar:stock_add"},{"text":"Отмена", "callback_data":"tar:stock_cancel"}]])
+            return
         command, argument = self._command(str(message.get("text", "")))
         if command == "/whoami":
             is_admin = user.get("id") == self._admin_chat_id
@@ -101,7 +122,6 @@ class RegistrarCoordinator:
         if command == COMMAND_ACCESS and user.get("id") == self._admin_chat_id:
             await self._async_request_access(argument)
             return
-        approved = self._registry.get_approved(chat_id)
         if approved and approved.get("can_control_home") and message.get("text"):
             try:
                 text = str(message["text"])

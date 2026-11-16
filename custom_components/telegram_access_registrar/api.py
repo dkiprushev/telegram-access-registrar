@@ -43,6 +43,21 @@ class TelegramApi:
         result = await self._post("getUpdates", payload)
         return result if isinstance(result, list) else []
 
+    async def async_download_file(self, file_id: str) -> tuple[bytes, str]:
+        """Download a Telegram attachment without persisting Telegram credentials."""
+        result = await self._post("getFile", {"file_id": file_id})
+        path = result.get("file_path") if isinstance(result, dict) else None
+        if not isinstance(path, str) or not path:
+            raise TelegramApiError("Telegram did not return the attachment path")
+        try:
+            async with self._session.get(f"https://api.telegram.org/file/bot{self._base_url.rsplit('bot', 1)[1]}/{path}", timeout=35) as response:
+                raw = await response.read()
+        except (ClientError, TimeoutError) as err:
+            raise TelegramApiError("Telegram attachment download failed") from err
+        if not response.ok or not raw:
+            raise TelegramApiError("Telegram attachment download failed")
+        return raw, path
+
     async def async_send_message(
         self, chat_id: int, text: str, inline_keyboard: list[list[dict[str, str]]] | None = None
     ) -> None:

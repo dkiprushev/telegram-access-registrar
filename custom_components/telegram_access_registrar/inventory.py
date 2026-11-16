@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 
 class InventoryAssistant:
@@ -17,6 +19,38 @@ class InventoryAssistant:
         if len(runtimes) != 1 or "grocy" not in runtimes[0]:
             raise ValueError("Интеграция Grocy ConnectLife Sync не готова")
         return runtimes[0]["grocy"]
+
+    async def async_propose_photo_purchase(self, image: bytes, caption: str) -> tuple[list[dict[str, Any]], str]:
+        """Store the original photo in HA media and derive a reviewable stock draft."""
+        grocy = self._grocy()
+        locations = await grocy.async_list("locations")
+        location_names = [str(row["name"]) for row in locations if row.get("name")]
+        filename = f"telegram_access_registrar/{uuid4().hex}.jpg"
+        target = Path(self._hass.config.path("media", filename))
+        await self._hass.async_add_executor_job(target.parent.mkdir, 0o755, True, True)
+        await self._hass.async_add_executor_job(target.write_bytes, image)
+        result = await self._hass.services.async_call(
+            "ai_task", "generate_data",
+            {"entity_id": "ai_task.codex_assist_ai_task", "task_name": "Photo inventory draft", "instructions": (
+                "Analyse this photo of household inventory. Return JSON array only: objects name, amount, location. "
+                "Count only visible items; if a technical rating is legible include it in name, otherwise do not guess. "
+                "Use amount 1 when uncertain. Locations must exactly be one of: " + json.dumps(location_names, ensure_ascii=False) + ". "
+                "Caption: " + caption),
+             "attachments": [{"media_content_id": f"media-source://media_source/local/{filename}", "media_content_type": "image/jpeg"}],
+             "structure": {"items_json": {"description": "JSON array only", "required": True, "selector": {"text": {}}}}},
+            blocking=True, return_response=True,
+        )
+        raw = result.get("data", {}).get("items_json") if isinstance(result, dict) else None
+        try: proposed = json.loads(raw) if isinstance(raw, str) else []
+        except json.JSONDecodeError: proposed = []
+        items = []
+        for item in proposed if isinstance(proposed, list) else []:
+            if not isinstance(item, dict) or not isinstance(item.get("name"), str) or item.get("location") not in location_names: continue
+            try: amount = float(item.get("amount", 1))
+            except (TypeError, ValueError): continue
+            if item["name"].strip() and 0 < amount <= 10000:
+                items.append({"name": item["name"].strip()[:120], "amount": amount, "location": item["location"], "photo": filename})
+        return items[:30], filename
 
     async def async_propose_purchase(self, text: str) -> list[dict[str, Any]]:
         """Extract a small, reviewable stock-add draft; never write Grocy here."""
@@ -64,6 +98,14 @@ class InventoryAssistant:
                 product_id = await grocy.async_create("products", {"name": item["name"], "location_id": location_id, "qu_id_purchase": units[0]["id"], "qu_id_stock": units[0]["id"], "min_stock_amount": 0})
                 product_ids[item["name"].casefold()] = product_id
             await grocy._request("POST", f"/api/stock/products/{product_id}/add", json={"amount": item["amount"], "location_id": location_id})
+            if item.get("photo"):
+                source = Path(self._hass.config.path("media", item["photo"]))
+                image = await self._hass.async_add_executor_job(source.read_bytes)
+                picture_name = Path(item["photo"]).name
+                async with grocy._session.put(grocy._url(f"/api/files/productpictures/{picture_name}"), headers=grocy._headers, data=image) as response:
+                    if response.status >= 400:
+                        raise ValueError("Grocy не принял фотографию товара")
+                await grocy._request("PUT", f"/api/objects/products/{product_id}", json={"picture_file_name": picture_name})
             purchased_ids.add(product_id)
             added.append(f"{item['name']} — {item['amount']:g} ({item['location']})")
         shopping = await grocy.async_list("shopping_list")
