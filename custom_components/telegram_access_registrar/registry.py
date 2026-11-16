@@ -65,6 +65,20 @@ class AccessRegistry:
         await self._save()
         return deepcopy(identity)
 
+    async def async_ensure_admin(self, chat_id: int) -> dict[str, Any]:
+        """Bootstrap the configured administrator without a self-approval step."""
+        key = str(chat_id)
+        identity = self._data["approved"].get(key, {
+            "chat_id": chat_id,
+            "username": "",
+            "display_name": "Administrator",
+        })
+        identity["can_control_home"] = True
+        self._data["approved"][key] = identity
+        self._data["pending"].pop(key, None)
+        await self._save()
+        return deepcopy(identity)
+
     async def async_reject(self, chat_id: int) -> dict[str, Any] | None:
         identity = self._data["pending"].pop(str(chat_id), None)
         if identity is not None:
