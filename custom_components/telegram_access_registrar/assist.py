@@ -6,6 +6,7 @@ from base64 import b64encode
 from contextvars import ContextVar
 import logging
 from urllib.parse import quote
+from uuid import uuid4
 
 import probatio
 from homeassistant.exceptions import HomeAssistantError
@@ -68,19 +69,54 @@ class TelegramAssist:
         self.inventory = inventory
         self.sessions: dict[int, str] = {}
         self.inventory_context: dict[int, tuple[str, str]] = {}
+        self.stock_changes: dict[int, tuple[str, dict]] = {}
 
     async def async_inventory_reply(self, chat_id: int, question: str) -> bool:
-        reply, photo_ids = await self.inventory.async_inventory_reply(
+        reply, photo_ids, change = await self.inventory.async_inventory_reply(
             question, previous=self.inventory_context.get(chat_id)
         )
         if reply == "NOT_INVENTORY":
             self.inventory_context.pop(chat_id, None)
             return False
         self.inventory_context[chat_id] = (question[:1000], reply[:2000])
+        if change:
+            token = uuid4().hex
+            name, amount, source = (change[key] for key in ("name", "amount", "source"))
+            if change["kind"] == "transfer":
+                summary = f"Переместить «{name}», {amount:g}, из {source} в {change['destination']}?"
+            else:
+                summary = f"Изменить остаток «{name}» в {source} с {change['before']:g} на {amount:g}?"
+            await self.api.async_send_message(chat_id, summary, [[
+                {"text": "Подтвердить", "callback_data": f"tar:edit_apply:{token}"},
+                {"text": "Отмена", "callback_data": f"tar:edit_cancel:{token}"},
+            ]])
+            self.stock_changes[chat_id] = token, change
+            return True
         await self.api.async_send_message(chat_id, reply[:4000])
         if photo_ids:
             await self._send_photos(chat_id, photo_ids)
         return True
+
+    async def async_confirm_change(self, chat_id: int, callback_id: str, action: str, token: str) -> None:
+        pending = self.stock_changes.get(chat_id)
+        if pending is None or pending[0] != token:
+            await self.api.async_answer_callback(callback_id, "Черновик больше недоступен")
+            return
+        _, change = self.stock_changes.pop(chat_id)
+        if action == "edit_cancel":
+            await self.api.async_answer_callback(callback_id, "Отменено")
+            return
+        await self.api.async_answer_callback(callback_id, "Проверяю остатки…")
+        try:
+            applied = await self.inventory.async_apply_change(change)
+        except Exception as err:
+            _LOGGER.warning("Grocy stock edit failed: %s", type(err).__name__)
+            await self.api.async_send_message(chat_id, "Grocy не подтвердил изменение. Проверь остатки перед повтором.")
+            return
+        self.inventory_context.pop(chat_id, None)
+        await self.api.async_send_message(
+            chat_id, "Изменение внесено в Grocy." if applied else "Остатки изменились. Запроси новый черновик."
+        )
 
     async def async_reply(self, chat_id: int, question: str) -> bool:
         if not question:

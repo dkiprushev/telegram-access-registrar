@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from base64 import b64encode
 import json
 from pathlib import Path
@@ -161,8 +162,9 @@ class InventoryAssistant:
 
     async def async_inventory_reply(
         self, question: str, *, previous: tuple[str, str] | None = None
-    ) -> tuple[str, set[int]]:
+    ) -> tuple[str, set[int], dict | None]:
         snapshot = await self.async_snapshot(include_product_ids=True)
+        locations = await self._grocy().async_list("locations")
         context = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
         instructions = (
             "You are a home inventory assistant. Answer in Russian, briefly and helpfully. "
@@ -173,6 +175,13 @@ class InventoryAssistant:
             "without asking for a brand or model. For photo requests return the matching in-stock product IDs "
             "with has_photo=true in photo_ids, and explain if no matches have photos. Use [] otherwise. "
             "For requests clearly unrelated to inventory, return exactly NOT_INVENTORY as reply.\n"
+            "For an explicit request to change stock return change_json with kind transfer or quantity, "
+            "and product_id, source (exact location name), amount, and for transfer destination (exact name). "
+            "For quantity, amount is the new total at source. For transfer, amount is what actually moves. "
+            "If asked to put all units at the destination, leave those already there alone. "
+            "Propose only one change; ask for clarification if ambiguous. Use {} otherwise. "
+            "Never say a proposed change has already happened.\n"
+            f"Locations: {json.dumps([row['name'] for row in locations], ensure_ascii=False)}\n"
             "Use the prior exchange only to resolve follow-ups. The snapshot has the current facts.\n"
             f"Prior exchange: {json.dumps(previous, ensure_ascii=False)}\n"
             f"Question: {question}\nGrocy snapshot: {context}"
@@ -183,6 +192,7 @@ class InventoryAssistant:
              "structure": {
                  "reply": {"description": "Short Russian answer grounded in the snapshot, or NOT_INVENTORY", "required": True, "selector": {"text": {}}},
                  "photo_ids": {"description": "JSON array of up to 10 integer product IDs to attach, or []", "required": True, "selector": {"text": {}}},
+                 "change_json": {"description": "One explicit stock change as JSON, or {}", "required": True, "selector": {"text": {}}},
              }},
             blocking=True, return_response=True,
         )
@@ -199,4 +209,57 @@ class InventoryAssistant:
             item for item in (selected[:10] if isinstance(selected, list) else [])
             if type(item) is int and item in available
         }
-        return reply.strip(), photo_ids
+        change = json.loads(data.get("change_json", "{}"))
+        if change:
+            if not isinstance(change, dict):
+                raise ValueError("Invalid stock change")
+            change = await self._validate_change(change)
+        return reply.strip(), photo_ids, change or None
+
+    async def _validate_change(self, change: dict) -> dict:
+        grocy = self._grocy()
+        products, locations, stock = await asyncio.gather(
+            grocy.async_list("products"), grocy.async_list("locations"), grocy.async_list("stock")
+        )
+        kind, product_id, amount = (change.get(key) for key in ("kind", "product_id", "amount"))
+        if kind not in ("transfer", "quantity") or type(product_id) is not int:
+            raise ValueError("Invalid stock operation")
+        if type(amount) not in (int, float) or not math.isfinite(amount) or amount < 0 or amount > 100000:
+            raise ValueError("Invalid stock amount")
+        product = next(row for row in products if int(row["id"]) == product_id)
+        if str(product.get("enable_tare_weight_handling", 0)).lower() in {"1", "true"}:
+            raise ValueError("Stock changes for tare-weight products are unsupported")
+        places = {row["name"]: int(row["id"]) for row in locations}
+        source = change["source"]
+        source_id = places[source]
+        destination = change.get("destination") if kind == "transfer" else None
+        destination_id = places[destination] if kind == "transfer" else None
+        before = sum(
+            float(row["amount"]) for row in stock
+            if int(row["product_id"]) == product_id and int(row["location_id"]) == source_id
+        )
+        if kind == "transfer" and (destination_id == source_id or not 0 < amount <= before):
+            raise ValueError("Invalid transfer")
+        destination_before = sum(
+            float(row["amount"]) for row in stock
+            if int(row["product_id"]) == product_id and int(row["location_id"]) == destination_id
+        )
+        return dict(kind=kind, product_id=product_id, name=product["name"], source=source,
+                    source_id=source_id, destination=destination, destination_id=destination_id,
+                    amount=amount, before=before, destination_before=destination_before)
+
+    async def async_apply_change(self, draft: dict) -> bool:
+        current = await self._validate_change(draft)
+        if current != draft:
+            return False
+        endpoint = f"/api/stock/products/{draft['product_id']}"
+        if draft["kind"] == "transfer":
+            await self._grocy()._request("POST", f"{endpoint}/transfer", json={
+                "amount": draft["amount"], "location_id_from": draft["source_id"],
+                "location_id_to": draft["destination_id"],
+            })
+        else:
+            await self._grocy()._request("POST", f"{endpoint}/inventory", json={
+                "new_amount": draft["amount"], "location_id": draft["source_id"],
+            })
+        return True

@@ -29,6 +29,7 @@ class RegistrarCoordinator:
         revise_photo: Callable[[list[dict[str, Any]], str], Awaitable[list[dict[str, Any]]]],
         assist_reply: Callable[[int, str], Awaitable[bool]] | None = None,
         log_request: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        confirm_change: Callable[[int, str, str, str], Awaitable[None]] | None = None,
     ) -> None:
         self._api = api
         self._registry = registry
@@ -40,6 +41,7 @@ class RegistrarCoordinator:
         self._revise_photo = revise_photo
         self._assist_reply = assist_reply
         self._log_request = log_request
+        self._confirm_change = confirm_change
         self._pending_stock: dict[int, tuple[str, list[dict[str, Any]]]] = {}
         self._offset: int | None = None
         self._task: asyncio.Task[None] | None = None
@@ -238,6 +240,16 @@ class RegistrarCoordinator:
         if not isinstance(sender, dict) or not isinstance(callback_id, str):
             return
         sender_id = int(sender.get("id", 0))
+        if isinstance(data, str) and data.startswith(("tar:edit_apply:", "tar:edit_cancel:")):
+            chat = (callback.get("message") or {}).get("chat", {})
+            approved = self._registry.get_approved(sender_id)
+            if (self._confirm_change is None or chat.get("type") != "private"
+                    or chat.get("id") != sender_id or not approved or not approved.get("can_control_home")):
+                await self._api.async_answer_callback(callback_id, "Черновик недоступен")
+                return
+            _, action, token = data.split(":", 2)
+            await self._confirm_change(sender_id, callback_id, action, token)
+            return
         if isinstance(data, str) and data.startswith(("tar:stock_add:", "tar:stock_cancel:")):
             _, action, token = data.split(":", 2)
             pending = self._pending_stock.get(sender_id)

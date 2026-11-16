@@ -79,6 +79,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         inventory.async_revise_photo,
         assist.async_reply,
         log_request,
+        assist.async_confirm_change,
     )
     await coordinator.async_start()
     await registry.async_ensure_admin(int(entry.data[CONF_ADMIN_CHAT_ID]))
