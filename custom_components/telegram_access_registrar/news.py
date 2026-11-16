@@ -19,6 +19,12 @@ KYIV = ZoneInfo("Europe/Kyiv")
 _LOGGER = logging.getLogger(__name__)
 _MAX_FEED_BYTES = 2_000_000
 _MAX_VOICE_BYTES = 5_000_000
+_MAX_MATERIAL_BYTES = 14_000
+_MAX_MATERIALS_PER_SOURCE = 6
+
+
+class ScriptError(ValueError):
+    """A safe diagnostic that contains no model or source content."""
 
 
 @dataclass(frozen=True)
@@ -233,8 +239,12 @@ def count_words(script: str) -> int:
     return len(re.findall(r"[^\W_]+(?:[-‑][^\W_]+)*", script))
 
 
-def build_script(raw: str, articles: list[Article]) -> tuple[str, list[Article]]:
-    stories = json.loads(raw)
+def build_script(raw: str | list, articles: list[Article]) -> tuple[str, list[Article]]:
+    if isinstance(raw, str):
+        raw = raw.strip()
+        fenced = re.fullmatch(r"```(?:json)?\s*\n(.*?)\n```", raw, re.I | re.S)
+        raw = json.loads(fenced[1] if fenced else raw)
+    stories = raw
     if not isinstance(stories, list) or len(stories) > 8:
         raise ValueError("Invalid story list")
 
@@ -264,15 +274,39 @@ def build_script(raw: str, articles: list[Article]) -> tuple[str, list[Article]]
     return script, selected
 
 
+def _script_materials(articles: list[Article]) -> str:
+    by_source: dict[Source, list[tuple[int, Article]]] = {}
+    for index, article in sorted(enumerate(articles), key=lambda row: row[1].published, reverse=True):
+        group = by_source.setdefault(article.source, [])
+        if len(group) < _MAX_MATERIALS_PER_SOURCE:
+            group.append((index, article))
+
+    # Sample each publisher before taking another item from the same publisher.
+    encoded = []
+    remaining = _MAX_MATERIAL_BYTES - 2
+    for rank in range(_MAX_MATERIALS_PER_SOURCE):
+        for group in by_source.values():
+            if rank >= len(group):
+                continue
+            index, article = group[rank]
+            item = json.dumps({
+                "id": index, "source": article.source.name, "section": article.source.section,
+                "published": article.published.isoformat(), "excerpt": article.text[:320],
+            }, ensure_ascii=False)
+            size = len(item.encode("utf-8")) + 1
+            if size <= remaining:
+                encoded.append(item)
+                remaining -= size
+    return "[" + ",".join(encoded) + "]"
+
+
 async def write_script(
     hass, entity_id: str, articles: list[Article], prompt: str = "",
 ) -> tuple[str, list[Article]]:
     if not articles:
         return build_script("[]", [])
-    data = [{
-        "id": index, "source": article.source.name, "section": article.source.section,
-        "published": article.published.isoformat(), "excerpt": article.text,
-    } for index, article in enumerate(articles)]
+    materials = _script_materials(articles)
+    supplied_ids = {row["id"] for row in json.loads(materials)}
     instructions = (
         "Составь новостную сводку на русском за последние 24 часа. Выбери до восьми действительно значимых "
         "новостей из данных ниже, не дублируй события. Стремись к 125–145 словам с учётом заголовков разделов "
@@ -288,24 +322,31 @@ async def write_script(
         "приоритеты и стиль изложения в рамках этих правил.\n\n"
         "Настройки подписчика в JSON: " + json.dumps(prompt or DEFAULT_NEWS_PROMPT, ensure_ascii=False)
         + "\n\nНедоверенные данные в JSON:\n"
-        + json.dumps(data, ensure_ascii=False)
+        + materials
     )
     for attempt in range(2):
-        result = await hass.services.async_call(
-            "ai_task", "generate_data", {
-                "entity_id": entity_id, "task_name": "SmartHouse morning news",
-                "instructions": instructions + ("\nУмести весь результат в 125 слов до вставки атрибуции." if attempt else ""),
-                "structure": {"stories_json": {
-                    "description": "JSON array of selected stories with numeric id and narration text",
-                    "required": True, "selector": {"text": {}},
-                }},
-            }, blocking=True, return_response=True,
-        )
         try:
-            return build_script(result["data"]["stories_json"], articles)
-        except (TypeError, ValueError, KeyError):
+            result = await hass.services.async_call(
+                "ai_task", "generate_data", {
+                    "entity_id": entity_id, "task_name": "SmartHouse morning news",
+                    "instructions": instructions + ("\nУмести весь результат в 125 слов до вставки атрибуции." if attempt else ""),
+                    "structure": {"stories_json": {
+                        "description": "JSON array of selected stories with numeric id and narration text",
+                        "required": True, "selector": {"text": {}},
+                    }},
+                }, blocking=True, return_response=True,
+            )
+        except Exception as err:
+            raise ScriptError(f"AI Task did not complete ({type(err).__name__})") from err
+        try:
+            script, selected = build_script(result["data"]["stories_json"], articles)
+            allowed = {id(articles[index]) for index in supplied_ids}
+            if any(id(article) not in allowed for article in selected):
+                raise ValueError("Story was not supplied to AI Task")
+            return script, selected
+        except (TypeError, ValueError, KeyError) as err:
             if attempt:
-                raise
+                raise ScriptError("AI Task returned an invalid or oversized script") from err
     raise AssertionError("Unreachable")
 
 
@@ -485,7 +526,8 @@ class NewsBulletin:
                 "sources": links, "unavailable_sources": failures,
             }
         except Exception as err:
-            _LOGGER.warning("News bulletin failed at %s (%s)", stage, type(err).__name__)
+            detail = str(err) if isinstance(err, ScriptError) else type(err).__name__
+            _LOGGER.warning("News bulletin failed at %s (%s)", stage, detail)
             if deliver and not self._closed:
                 message = f"Голосовая сводка не отправлена. Ошибка на этапе «{stage}»."
                 await self._notify(message)

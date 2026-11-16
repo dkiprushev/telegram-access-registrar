@@ -278,3 +278,34 @@ async def test_subscriber_prompts_are_isolated_and_shared_editions_are_generated
     await bulletin.handle_command(registry, 456, "/news", "default")
     assert registry.news_prompt(456) == ""
     assert 456 in registry.news_subscribers()
+
+
+async def test_large_news_feed_keeps_model_request_bounded_and_accepts_fenced_output():
+    articles = [
+        news.Article(source, f"https://example.invalid/{index}", NOW, "Новость " * 200)
+        for source in news.SOURCES
+        for index in range(30)
+    ]
+    call = AsyncMock(return_value={
+        "data": {"stories_json": '\x60\x60\x60json\n[{"id": 0, "text": "Появились результаты исследования."}]\n\x60\x60\x60'},
+    })
+    hass = SimpleNamespace(services=SimpleNamespace(async_call=call))
+    script, selected = await news.write_script(hass, "ai_task.test", articles)
+    payload = call.await_args.args[2]
+    assert len(json.dumps(payload, ensure_ascii=False).encode()) < 32768
+    materials = json.loads(payload["instructions"].split("Недоверенные данные в JSON:\n", 1)[1])
+    assert {row["source"] for row in materials} == {source.name for source in news.SOURCES}
+    assert max(len(row["excerpt"]) for row in materials) <= 320
+    assert script == "ИИ. Появились результаты исследования."
+    assert selected == [articles[0]]
+
+
+async def test_script_errors_identify_provider_and_invalid_output_without_logging_contents():
+    call = AsyncMock(side_effect=RuntimeError("private provider detail"))
+    hass = SimpleNamespace(services=SimpleNamespace(async_call=call))
+    with pytest.raises(news.ScriptError, match=r"^AI Task did not complete \(RuntimeError\)$"):
+        await news.write_script(hass, "ai_task.test", [article(0)])
+    call.side_effect = None
+    call.return_value = {"data": {"stories_json": [{"id": 2, "text": "private model detail"}]}}
+    with pytest.raises(news.ScriptError, match="^AI Task returned an invalid or oversized script$"):
+        await news.write_script(hass, "ai_task.test", [article(0)])
