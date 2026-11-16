@@ -23,7 +23,7 @@ class RegistrarCoordinator:
         fire_access_event: Callable[[dict[str, Any]], None],
         answer_inventory: Callable[[str], Awaitable[str]],
         propose_purchase: Callable[[str], Awaitable[list[dict[str, Any]]]],
-        add_stock: Callable[[list[dict[str, Any]]], Awaitable[list[str]]],
+        add_stock: Callable[[list[dict[str, Any]]], Awaitable[tuple[list[str], list[str]]]],
     ) -> None:
         self._api = api
         self._registry = registry
@@ -149,12 +149,15 @@ class RegistrarCoordinator:
             if data == "tar:stock_cancel":
                 await self._api.async_answer_callback(callback_id, "Отменено")
                 return
-            try: added = await self._add_stock(items)
+            try: added, removed = await self._add_stock(items)
             except Exception as err:
                 _LOGGER.warning("Grocy stock add failed: %s", err)
                 await self._api.async_answer_callback(callback_id, "Не удалось добавить")
             else:
-                await self._api.async_send_message(sender_id, "Добавлено в Grocy:\n" + "\n".join(f"• {x}" for x in added))
+                text = "Добавлено в Grocy:\n" + "\n".join(f"• {x}" for x in added)
+                if removed:
+                    text += "\n\nУдалено из списка покупок:\n" + "\n".join(f"• {x}" for x in removed)
+                await self._api.async_send_message(sender_id, text)
                 await self._api.async_answer_callback(callback_id, "Добавлено")
             return
         if sender_id != self._admin_chat_id:

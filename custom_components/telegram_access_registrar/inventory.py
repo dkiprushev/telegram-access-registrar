@@ -49,14 +49,14 @@ class InventoryAssistant:
                 valid.append({"name": item["name"].strip()[:120], "amount": amount, "location": item["location"]})
         return valid[:30]
 
-    async def async_add_stock(self, items: list[dict[str, Any]]) -> list[str]:
-        """Write the already-confirmed draft and return exactly what was added."""
+    async def async_add_stock(self, items: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+        """Write the confirmed draft, then remove matching active shopping rows."""
         grocy = self._grocy()
         products, locations, units = await asyncio.gather(grocy.async_list("products"), grocy.async_list("locations"), grocy.async_list("quantity_units"))
         if not units: raise ValueError("В Grocy нет единицы измерения")
         location_ids = {str(row["name"]): int(row["id"]) for row in locations if row.get("id") is not None}
         product_ids = {str(row["name"]).casefold(): int(row["id"]) for row in products if row.get("id") is not None and row.get("name")}
-        added = []
+        added, purchased_ids = [], set()
         for item in items:
             location_id = location_ids[item["location"]]
             product_id = product_ids.get(item["name"].casefold())
@@ -64,8 +64,15 @@ class InventoryAssistant:
                 product_id = await grocy.async_create("products", {"name": item["name"], "location_id": location_id, "qu_id_purchase": units[0]["id"], "qu_id_stock": units[0]["id"], "min_stock_amount": 0})
                 product_ids[item["name"].casefold()] = product_id
             await grocy._request("POST", f"/api/stock/products/{product_id}/add", json={"amount": item["amount"], "location_id": location_id})
+            purchased_ids.add(product_id)
             added.append(f"{item['name']} — {item['amount']:g} ({item['location']})")
-        return added
+        shopping = await grocy.async_list("shopping_list")
+        removed = []
+        for row in shopping:
+            if row.get("product_id") in purchased_ids and not (row.get("done") or row.get("done_date")) and row.get("id") is not None:
+                await grocy.async_delete("shopping_list", int(row["id"]))
+                removed.append(names.get(int(row["product_id"]), str(row["product_id"])))
+        return added, removed
 
     async def async_answer(self, question: str) -> str:
         grocy = self._grocy()
