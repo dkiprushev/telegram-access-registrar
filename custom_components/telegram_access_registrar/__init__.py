@@ -11,8 +11,10 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.util import dt as dt_util
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
+from homeassistant.helpers import llm
 
 from .api import TelegramApi
+from .assist import SmartHouseAPI, TelegramAssist
 from .const import (
     CONF_ADMIN_CHAT_ID,
     CONF_BOT_TOKEN,
@@ -58,6 +60,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     inventory = InventoryAssistant(hass)
+    assist = TelegramAssist(hass, api, inventory)
     coordinator = RegistrarCoordinator(
         api,
         registry,
@@ -65,6 +68,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         lambda data: (hass.bus.async_fire(EVENT_ACCESS_REQUESTED, data), request_access(data)),
         inventory.async_answer, inventory.async_propose_purchase, inventory.async_add_stock, inventory.async_propose_photo_purchase,
         inventory.async_revise_photo,
+        assist.async_reply,
     )
     await coordinator.async_start()
     await registry.async_ensure_admin(int(entry.data[CONF_ADMIN_CHAT_ID]))
@@ -74,6 +78,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "api": api,  # Kept runtime-only; never persisted.
     }
     _async_register_services(hass)
+    entry.async_on_unload(llm.async_register_api(hass, SmartHouseAPI(hass, inventory, entry.entry_id)))
     return True
 
 

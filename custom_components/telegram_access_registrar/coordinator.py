@@ -27,6 +27,7 @@ class RegistrarCoordinator:
         add_stock: Callable[[list[dict[str, Any]]], Awaitable[tuple[list[str], list[str]]]],
         propose_photo: Callable[[bytes, str], Awaitable[tuple[list[dict[str, Any]], str]]],
         revise_photo: Callable[[list[dict[str, Any]], str], Awaitable[list[dict[str, Any]]]],
+        assist_reply: Callable[[int, str], Awaitable[None]] | None = None,
     ) -> None:
         self._api = api
         self._registry = registry
@@ -36,6 +37,7 @@ class RegistrarCoordinator:
         self._propose_purchase, self._add_stock = propose_purchase, add_stock
         self._propose_photo = propose_photo
         self._revise_photo = revise_photo
+        self._assist_reply = assist_reply
         self._pending_stock: dict[int, tuple[str, list[dict[str, Any]]]] = {}
         self._offset: int | None = None
         self._task: asyncio.Task[None] | None = None
@@ -140,6 +142,13 @@ class RegistrarCoordinator:
             await self._async_request_access(argument)
             return
         if private_user and approved and approved.get("can_control_home") and message.get("text"):
+            if command == "/assist" and self._assist_reply is not None:
+                try:
+                    await self._assist_reply(chat_id, argument)
+                except Exception as err:
+                    _LOGGER.warning("Telegram Assist request failed: %s", type(err).__name__)
+                    await self._api.async_send_message(chat_id, "Не удалось получить ответ Codex Assist. Проверь настройки разговорного агента.")
+                return
             try:
                 text = str(message["text"])
                 pending = self._pending_stock.get(chat_id)

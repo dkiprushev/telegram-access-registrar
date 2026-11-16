@@ -1,66 +1,97 @@
-# Telegram Access Registrar
+# SmartHouse · Telegram Access Registrar
 
-## Akuvox temporary keys
+Интеграция Home Assistant для существующего Telegram-бота SmartHouse. В одном боте можно принимать заявки гостей, выдавать временные ключи Akuvox и работать с запасами Grocy. Инструкция описывает функции версии 0.4.6.
 
-The `telegram_access_registrar.issue_akuvox_key` action issues a 48-hour key and
-sends both the PIN and QR image to an approved Telegram user.  It intentionally
-requires the exact relay names on every call; use `Вхід 25-Е` and `Ліфт
-пасажирський 25-Е` in the automation.
+## Установка и обновление
 
-Home Assistant custom integration for approving recipients of the existing `SmartHouse` Telegram bot before they can receive temporary building-access keys.
+1. Добавьте [репозиторий](https://github.com/dkiprushev/telegram-access-registrar) в HACS как пользовательский репозиторий типа **Integration**, если он ещё не подключён.
+2. Установите **Telegram Access Registrar** и перезапустите Home Assistant.
+3. В **Настройки → Устройства и службы → Добавить интеграцию** выберите **Telegram Access Registrar**.
+4. Введите два обязательных поля: `bot_token` — токен существующего бота, `admin_chat_id` — числовой ID личного чата администратора. Администратор должен открыть личный чат с ботом и нажать **Start**, чтобы бот мог присылать ему заявки. После загрузки интеграция автоматически одобряет администратора и включает ему право общения с домом.
+5. Если этим же токеном пользуется другая интеграция, остановите её опрос Telegram и перенесите нужные автоматизации. Для отправки текста одобренным получателям используйте `telegram_access_registrar.send_message`. Список разрешённых чатов старой интеграции не импортируется.
 
-## What it does
+При обновлении установите новый тег через HACS и перезапустите Home Assistant. Регистрации и права сохраняются в локальном хранилище Home Assistant. Открытые черновики хранятся в памяти и после перезапуска исчезают.
 
-1. A visitor presses **Start** in `SmartHouse`.
-2. The bot sends the configured administrator an approval request with **Allow** and **Reject** buttons.
-3. On approval, the visitor's immutable Telegram `chat_id` and current username are stored locally in Home Assistant.
-4. Only the administrator can use `/access @username`. The integration fires `telegram_access_registrar_access_requested` with the approved recipient. A Home Assistant automation can then create an Akuvox key and call `telegram_access_registrar.send_message` to deliver it.
+### Что нужно для отдельных функций
 
-The integration does **not** open doors and does not create Akuvox keys itself. Keeping key creation in an explicit Home Assistant automation makes the selected doors, expiry and audit trail visible and reviewable.
+- **Ключи** — один настроенный аккаунт Akuvox SmartPlus с нужными реле. Встроенная команда использует точные имена `Вхід 25-Е` и `Ліфт пасажирський 25-Е`.
+- **Grocy** — один загруженный экземпляр Grocy ConnectLife Sync (`hisense_food_manager`) с рабочим подключением к Grocy. Для добавления нужны настроенные локации и единицы измерения.
+- **Распознавание текста и фото** — Codex Assist с сущностью `ai_task.codex_assist_ai_task`. Модель выбирается в Codex Assist. Для фото нужен доступный локальный медиакаталог Home Assistant с ключом `local`. Текст запроса, необходимые для задачи данные Grocy и фото при распознавании передаются в настроенный AI Task.
 
-## Security model
+## Команды Telegram
 
-- Telegram permits only one polling consumer per token. This integration is therefore the **replacement** for Home Assistant's built-in `Telegram bot` integration for the existing `SmartHouse` token; do not leave both integrations polling the same bot.
-- Only the configured administrator chat can approve applications or submit `/access`.
-- A username is only a convenient lookup label. The authorization record uses Telegram's numeric `chat_id`.
-- Pending and approved identities are stored locally through Home Assistant's `.storage`; the token stays in the integration's config entry and is never logged or returned by services.
-- The integration must be installed before a public bot username is shared. It sends no access key on `/start`.
+Команды лучше отправлять в личном чате со SmartHouse. Управление правами и сценарии Grocy работают только в личном чате.
 
-## Installation through HACS
+| Команда | Кто может использовать | Параметры и результат |
+| --- | --- | --- |
+| `/start` | Любой пользователь | Создаёт заявку. Администратору приходят кнопки **Разрешить** и **Отклонить**. Для уже одобренного пользователя повторный запуск обновляет имя и username, сохраняя права. |
+| `/whoami` | Любой пользователь | Показывает Telegram User ID, Chat ID и статус администратора. |
+| `/access @visitor` | Администратор | Встроенная выдача временного ключа на 48 часов для входа и пассажирского лифта. Получатель должен быть одобрен и иметь username. Числовой ID здесь не поддерживается. |
+| `/home_users` | Администратор | Показывает одобренных пользователей, их ID и право общения с домом. Знак ✓ означает, что право включено. |
+| `/home_allow @visitor` | Администратор | Включает право для одобренного пользователя. Вместо username можно указать числовой ID из `/home_users`. |
+| `/home_revoke @visitor` | Администратор | Отзывает право и сбрасывает открытый черновик пользователя. Принимает username или числовой ID. Отзыв у текущего администратора этой командой запрещён. |
+| `/add 2 пиццы и салфетки` | Пользователь с правом общения с домом | Создаёт черновик добавления в Grocy. |
+| `/assist Какие у меня есть блоки питания?` | Пользователь с правом общения с домом | Передаёт запрос разговорному агенту Codex Assist. Последующие команды `/assist` в том же чате используют контекст предыдущих запросов. |
 
-1. In HACS, add this GitHub repository as a custom **Integration** repository.
-2. Download **Telegram Access Registrar** and restart Home Assistant.
-3. Go to **Settings → Devices & services → Add integration → Telegram Access Registrar**.
-4. Enter the existing `SmartHouse` bot token and the administrator's numeric Telegram chat ID. The administrator must already have pressed **Start** in `SmartHouse`.
-5. After this integration is configured, remove the former **Telegram bot** integration that uses the same token. Do this only after the registrar appears loaded; it takes over long polling at that point.
+Чтобы добавить человека, попросите его нажать **Start**, одобрите заявку и отправьте `/home_allow @visitor`. Команда `/home_revoke @visitor` убирает доступ к Grocy через бота. Статус одобренного получателя и ранее выданные ключи сохраняются. Кнопка **Отклонить** применяется только к ожидающей заявке.
 
-## Services
+## Работа с Grocy
 
-- `telegram_access_registrar.list_requests` returns local pending and approved records.
-- `telegram_access_registrar.approve` and `telegram_access_registrar.reject` are manual fallbacks for a numeric chat ID.
-- `telegram_access_registrar.send_message` sends text only to an approved `username`.
+1. **Спросить об остатках.** Напишите «Есть ли рис?», «Что в холодильнике?» или «Что купить?». Бот читает остатки из всех локаций Grocy и список покупок. Ему доступны данные Grocy, поэтому температура чайника и управление устройствами в этот сценарий не входят.
+2. **Добавить покупки текстом.** Напишите «Купил 2 пиццы и салфетки». Поддерживаются также сообщения, начинающиеся с «купила», «добавь», «добавил», либо команда `/add`. Проверьте распознанные позиции, количества и локации.
+3. **Добавить вещи по фото.** Отправьте изображение как фото Telegram и, если нужно, подпишите его, например «Блоки питания, которые есть, положить в Storage». Бот использует локации из Grocy и может включить в черновик характеристики, читаемые на этикетках. Проверьте количество и маркировку. После подтверждения снимок прикрепляется к карточкам товаров.
+4. **Уточнить черновик по фото.** Пока он открыт, напишите обычным сообщением, например «Это один тройник и два блока питания, всё в Storage». Бот покажет новую версию. Кнопки предыдущей версии больше не действуют. Обычные сообщения при открытом черновике по фото считаются уточнениями. Чтобы вернуться к вопросам об остатках, подтвердите или отмените черновик.
+5. **Подтвердить или отменить.** Кнопка **Добавить** записывает остатки в Grocy, создавая отсутствующие товары, и убирает совпавшие незакрытые строки из списка покупок. Кнопка **Отмена** сбрасывает черновик без записи в Grocy. Если подтверждение завершилось ошибкой, проверьте фактические остатки перед повтором, поскольку часть записей могла сохраниться.
 
-## Event for the Akuvox automation
+Черновики ограничены 30 позициями. Обработка чеков как отдельный сценарий и правка уже проведённого импорта по фото пока не реализованы.
 
-When the configured administrator writes `/access @username`, the integration fires:
+## Диалог с Codex Assist и фото из Grocy
+
+1. В **Настройки → Устройства и службы → Codex Assist** добавьте отдельный разговорный агент **SmartHouse Telegram**. Проверьте, что ID сущности агента — `conversation.smarthouse_telegram`.
+2. В расширенных настройках агента (**Home Assistant tools**) выберите **SmartHouse Grocy**. Этот набор инструментов даёт агенту остатки, список покупок и возможность приложить фото из Grocy в текущий ответ. Для такого сценария достаточно этого набора.
+3. В личном чате с ботом напишите `/assist Какие у меня есть блоки питания?`, затем `/assist Покажи их фото`. Codex Assist выбирает товары, а SmartHouse скачивает прикреплённые JPEG или PNG из Grocy и отправляет их в чат. Общий снимок нескольких товаров отправляется один раз.
+
+Диалог `/assist` ведётся отдельно для каждого чата. Текстовые вопросы Grocy без команды, импорт покупок и фото, гостевые ключи и управление правами используют прежние сценарии.
+
+## Действия Home Assistant
+
+Откройте **Инструменты разработчика → Действия**. Если интерфейс не показывает параметр или не принимает введённое значение, переключитесь в YAML. Имена ниже приведены с полным префиксом.
+
+| Действие | Параметры | Результат |
+| --- | --- | --- |
+| `telegram_access_registrar.list_requests` | Нет | Обязательный ответ с массивами `approved` и `pending`. Записи содержат `chat_id`, `username`, `display_name` и `can_control_home`. |
+| `telegram_access_registrar.approve` | `chat_id` (целое, обязательно) | Одобряет ожидающую заявку. Необязательный ответ `approved`, `recipient`. |
+| `telegram_access_registrar.reject` | `chat_id` (целое, обязательно) | Отклоняет ожидающую заявку. Необязательный ответ `rejected`, `recipient`. |
+| `telegram_access_registrar.set_home_control` | `chat_id` (целое, обязательно), `allowed` (`true` или `false`, обязательно) | Меняет право одобренного пользователя. Необязательный ответ `updated`, `recipient`. |
+| `telegram_access_registrar.set_admin_chat_id` | `chat_id` (целое, обязательно) | Сохраняет новый ID администратора и перезагружает интеграцию. Право общения с домом бывшего администратора можно отозвать отдельно. |
+| `telegram_access_registrar.send_message` | `username` (строка, обязательно), `message` (строка, обязательно) | Отправляет текст одобренному получателю. Username допускается с `@` или без него. |
+| `telegram_access_registrar.issue_akuvox_key` | `username` (строка, обязательно), `relay_names` (список точных имён реле, обязательно), `duration_hours` (целое, 1–168, по умолчанию 48), `uses` (целое, 1–100000, по умолчанию 100) | Создаёт ключ и отправляет PIN и QR. Обязательный ответ с `key_id`, `pin` и `expires_at`. |
+
+Вариант выдачи из скрипта Home Assistant со своими параметрами:
 
 ```yaml
-event_type: telegram_access_registrar_access_requested
-event_data:
-  recipient:
-    chat_id: 123456789
-    username: visitor
-    display_name: Visitor Name
-  requested_by: 393495611
+action: telegram_access_registrar.issue_akuvox_key
+data:
+  username: visitor
+  relay_names:
+    - 'Вхід 25-Е'
+    - 'Ліфт пасажирський 25-Е'
+  duration_hours: 24
+  uses: 10
+response_variable: issued_key
 ```
 
-Build the Akuvox automation with this event as the trigger. Make it create a 48-hour key for `Вхід 25-Е` and `Ліфт пасажирський 25-Е`; after successful creation, use `telegram_access_registrar.send_message` with `username: "{{ trigger.event.data.recipient.username }}"` to deliver the code.
+Команда `/access` также публикует событие `telegram_access_registrar_access_requested`. В событии есть `recipient` с данными одобренного получателя и `requested_by` с ID администратора. Событие означает, что запрос принят. Его можно использовать для аудита. Если старая автоматизация создаёт ключ на это же событие, возможна двойная выдача.
 
-## Migrating the existing SmartHouse bot
+## Если что-то не работает
 
-The built-in `telegram_bot` actions use a separate allowlist and will stop when that integration is removed. Before removing it, replace any existing uses of `telegram_bot.send_message` with `telegram_access_registrar.send_message` for approved recipients. The registrar does not copy the core integration's allowlist: the configured administrator is always recognized by the configured numeric ID, while every visitor registers through the same bot.
+- **Telegram сообщает о конфликте опроса.** Проверьте, что токен используется только одним получателем обновлений.
+- **Бот не узнаёт администратора.** Выполните `/whoami` в личном чате и сравните Chat ID с настройкой. Для исправления используйте `set_admin_chat_id`.
+- **Не найден получатель.** Убедитесь, что заявка одобрена и в списке сохранён актуальный username. Получатель может повторить `/start`, чтобы обновить его.
+- **Черновик недоступен.** Используйте кнопки последней версии черновика. После перезапуска HA создайте черновик заново.
+- **Ошибка фото, Grocy или выдачи ключа.** Откройте **Настройки → Система → Журналы** и проверьте записи за время ошибки от `telegram_access_registrar` и соответствующей интеграции.
 
-## Development
+## Разработка
 
 ```sh
 python3 -m pip install -r requirements-dev.txt

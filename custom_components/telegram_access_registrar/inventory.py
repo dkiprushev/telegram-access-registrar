@@ -133,7 +133,7 @@ class InventoryAssistant:
                 removed.append(purchased_ids[int(row["product_id"])])
         return added, removed
 
-    async def async_answer(self, question: str) -> str:
+    async def async_snapshot(self, *, include_product_ids: bool = False) -> dict:
         grocy = self._grocy()
         products, locations, units, stock, shopping = await asyncio.gather(
             grocy.async_list("products"), grocy.async_list("locations"),
@@ -141,6 +141,7 @@ class InventoryAssistant:
             grocy.async_list("shopping_list"),
         )
         names = {int(row["id"]): str(row["name"]) for row in products if row.get("id") is not None and row.get("name")}
+        photo_ids = {int(row["id"]) for row in products if row.get("picture_file_name")}
         places = {int(row["id"]): str(row["name"]) for row in locations if row.get("id") is not None and row.get("name")}
         unit_names = {int(row["id"]): str(row["name"]) for row in units if row.get("id") is not None and row.get("name")}
         inventory = []
@@ -148,12 +149,18 @@ class InventoryAssistant:
             product_id, location_id = row.get("product_id"), row.get("location_id")
             amount = float(row.get("amount") or 0)
             if amount > 0 and product_id in names and location_id in places:
-                inventory.append({"name": names[product_id], "amount": amount, "unit": unit_names.get(row.get("qu_id"), ""), "location": places[location_id]})
+                item = {"name": names[product_id], "amount": amount, "unit": unit_names.get(row.get("qu_id"), ""), "location": places[location_id]}
+                if include_product_ids:
+                    item.update(product_id=product_id, has_photo=product_id in photo_ids)
+                inventory.append(item)
         shopping_items = [
             {"name": names.get(row.get("product_id"), ""), "amount": row.get("amount"), "done": bool(row.get("done") or row.get("done_date"))}
             for row in shopping if row.get("product_id") in names
         ]
-        context = json.dumps({"inventory": inventory[:500], "shopping_list": shopping_items[:250]}, ensure_ascii=False, separators=(",", ":"))
+        return {"inventory": inventory[:500], "shopping_list": shopping_items[:250]}
+
+    async def async_answer(self, question: str) -> str:
+        context = json.dumps(await self.async_snapshot(), ensure_ascii=False, separators=(",", ":"))
         instructions = (
             "You are a home inventory assistant. Answer in Russian, briefly and helpfully. "
             "Use ONLY the supplied Grocy snapshot: never invent stock. Include location and quantity when useful. "
