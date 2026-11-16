@@ -25,13 +25,24 @@ class InventoryAssistant:
 
     async def async_propose_photo_purchase(self, image: bytes, caption: str) -> tuple[list[dict[str, Any]], str]:
         """Store the original photo in HA media and derive a reviewable stock draft."""
-        grocy = self._grocy()
-        locations = await grocy.async_list("locations")
-        location_names = [str(row["name"]) for row in locations if row.get("name")]
         filename = f"telegram_access_registrar/{uuid4().hex}.jpg"
         target = self._photo_path(filename)
         await self._hass.async_add_executor_job(target.parent.mkdir, 0o755, True, True)
         await self._hass.async_add_executor_job(target.write_bytes, image)
+        return await self._async_photo_draft(filename, caption), filename
+
+    async def async_revise_photo(self, previous: list[dict[str, Any]], correction: str) -> list[dict[str, Any]]:
+        instructions = (
+            "Revise the current draft using the user's correction below. Explicit user observations override "
+            "image guesses. For a full replacement list drop old entries; for a partial edit keep untouched entries. "
+            "Keep locations unless corrected. If the user asks to see the current list, reproduce it unchanged. "
+            f"Current draft: {json.dumps(previous, ensure_ascii=False)}\nUser message: {correction}"
+        )
+        return await self._async_photo_draft(previous[0]["photo"], instructions)
+
+    async def _async_photo_draft(self, filename: str, caption: str) -> list[dict[str, Any]]:
+        locations = await self._grocy().async_list("locations")
+        location_names = [str(row["name"]) for row in locations if row.get("name")]
         result = await self._hass.services.async_call(
             "ai_task", "generate_data",
             {"entity_id": "ai_task.codex_assist_ai_task", "task_name": "Photo inventory draft", "instructions": (
@@ -53,7 +64,7 @@ class InventoryAssistant:
             except (TypeError, ValueError): continue
             if item["name"].strip() and 0 < amount <= 10000:
                 items.append({"name": item["name"].strip()[:120], "amount": amount, "location": item["location"], "photo": filename})
-        return items[:30], filename
+        return items[:30]
 
     async def async_propose_purchase(self, text: str) -> list[dict[str, Any]]:
         """Extract a small, reviewable stock-add draft; never write Grocy here."""
@@ -93,7 +104,7 @@ class InventoryAssistant:
         if not units: raise ValueError("В Grocy нет единицы измерения")
         location_ids = {str(row["name"]): int(row["id"]) for row in locations if row.get("id") is not None}
         product_ids = {str(row["name"]).casefold(): int(row["id"]) for row in products if row.get("id") is not None and row.get("name")}
-        added, purchased_ids = [], set()
+        added, purchased_ids = [], {}
         for item in items:
             location_id = location_ids[item["location"]]
             product_id = product_ids.get(item["name"].casefold())
@@ -109,14 +120,14 @@ class InventoryAssistant:
                     if response.status >= 400:
                         raise ValueError("Grocy не принял фотографию товара")
                 await grocy._request("PUT", f"/api/objects/products/{product_id}", json={"picture_file_name": picture_name})
-            purchased_ids.add(product_id)
+            purchased_ids[product_id] = item["name"]
             added.append(f"{item['name']} — {item['amount']:g} ({item['location']})")
         shopping = await grocy.async_list("shopping_list")
         removed = []
         for row in shopping:
             if row.get("product_id") in purchased_ids and not (row.get("done") or row.get("done_date")) and row.get("id") is not None:
                 await grocy.async_delete("shopping_list", int(row["id"]))
-                removed.append(names.get(int(row["product_id"]), str(row["product_id"])))
+                removed.append(purchased_ids[int(row["product_id"])])
         return added, removed
 
     async def async_answer(self, question: str) -> str:

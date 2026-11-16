@@ -64,6 +64,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         int(entry.data[CONF_ADMIN_CHAT_ID]),
         lambda data: (hass.bus.async_fire(EVENT_ACCESS_REQUESTED, data), request_access(data)),
         inventory.async_answer, inventory.async_propose_purchase, inventory.async_add_stock, inventory.async_propose_photo_purchase,
+        inventory.async_revise_photo,
     )
     await coordinator.async_start()
     await registry.async_ensure_admin(int(entry.data[CONF_ADMIN_CHAT_ID]))

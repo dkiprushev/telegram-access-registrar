@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from uuid import uuid4
 from typing import Any, Awaitable, Callable
 
 from .api import TelegramApi, TelegramApiError
@@ -25,6 +26,7 @@ class RegistrarCoordinator:
         propose_purchase: Callable[[str], Awaitable[list[dict[str, Any]]]],
         add_stock: Callable[[list[dict[str, Any]]], Awaitable[tuple[list[str], list[str]]]],
         propose_photo: Callable[[bytes, str], Awaitable[tuple[list[dict[str, Any]], str]]],
+        revise_photo: Callable[[list[dict[str, Any]], str], Awaitable[list[dict[str, Any]]]],
     ) -> None:
         self._api = api
         self._registry = registry
@@ -33,9 +35,21 @@ class RegistrarCoordinator:
         self._answer_inventory = answer_inventory
         self._propose_purchase, self._add_stock = propose_purchase, add_stock
         self._propose_photo = propose_photo
-        self._pending_stock: dict[int, list[dict[str, Any]]] = {}
+        self._revise_photo = revise_photo
+        self._pending_stock: dict[int, tuple[str, list[dict[str, Any]]]] = {}
         self._offset: int | None = None
         self._task: asyncio.Task[None] | None = None
+
+    async def _send_draft(self, chat_id: int, items: list[dict[str, Any]], title: str) -> None:
+        token = uuid4().hex
+        lines = "\n".join(f"• {item['name']} — {item['amount']:g}, {item['location']}" for item in items)
+        for start in range(0, len(lines), 1800):
+            await self._api.async_send_message(chat_id, f"{title}\n{lines[start:start + 1800]}")
+        await self._api.async_send_message(chat_id, "Подтвердить добавление?", [[
+            {"text": "Добавить", "callback_data": f"tar:stock_add:{token}"},
+            {"text": "Отмена", "callback_data": f"tar:stock_cancel:{token}"},
+        ]])
+        self._pending_stock[chat_id] = token, items
 
     async def async_start(self) -> None:
         await self._registry.async_load()
@@ -97,9 +111,7 @@ class RegistrarCoordinator:
             if not items:
                 await self._api.async_send_message(chat_id, "На фото не удалось уверенно распознать предметы.")
                 return
-            self._pending_stock[chat_id] = items
-            draft = "\n".join(f"• {x['name']} — {x['amount']:g}, {x['location']}" for x in items)
-            await self._api.async_send_message(chat_id, f"Черновик по фото:\n{draft}\n\nПодтвердить добавление?", [[{"text":"Добавить", "callback_data":"tar:stock_add"},{"text":"Отмена", "callback_data":"tar:stock_cancel"}]])
+            await self._send_draft(chat_id, items, "Черновик по фото. Можно уточнить обычным сообщением:")
             return
         command, argument = self._command(str(message.get("text", "")))
         if command == "/whoami":
@@ -125,14 +137,20 @@ class RegistrarCoordinator:
         if approved and approved.get("can_control_home") and message.get("text"):
             try:
                 text = str(message["text"])
+                pending = self._pending_stock.get(chat_id)
+                if pending and pending[1][0].get("photo") and not command.startswith("/") and chat.get("type") == "private" and user.get("id") == chat_id:
+                    revised = await self._revise_photo(pending[1], text)
+                    if revised:
+                        await self._send_draft(chat_id, revised, "Обновлённый черновик по фото:")
+                    else:
+                        await self._api.async_send_message(chat_id, "Не удалось применить уточнение. Текущий черновик сохранён.")
+                    return
                 if text.casefold().startswith(("купил", "купила", "добавь", "добавил", "/add")):
                     items = await self._propose_purchase(text)
                     if not items:
                         await self._api.async_send_message(chat_id, "Не увидел в сообщении понятных покупок. Напиши, например: «купил 2 пиццы и салфетки»." )
                         return
-                    self._pending_stock[chat_id] = items
-                    draft = "\n".join(f"• {x['name']} — {x['amount']:g}, {x['location']}" for x in items)
-                    await self._api.async_send_message(chat_id, f"Черновик добавления в Grocy:\n{draft}\n\nПодтвердить?", [[{"text":"Добавить", "callback_data":"tar:stock_add"},{"text":"Отмена", "callback_data":"tar:stock_cancel"}]])
+                    await self._send_draft(chat_id, items, "Черновик добавления в Grocy:")
                     return
                 answer = await self._answer_inventory(text)
             except Exception as err:  # The bot must remain available if Grocy/AI is down.
@@ -161,12 +179,15 @@ class RegistrarCoordinator:
         if not isinstance(sender, dict) or not isinstance(callback_id, str):
             return
         sender_id = int(sender.get("id", 0))
-        if data in {"tar:stock_add", "tar:stock_cancel"}:
-            items = self._pending_stock.pop(sender_id, None)
-            if not items or not self._registry.get_approved(sender_id):
+        if isinstance(data, str) and data.startswith(("tar:stock_add:", "tar:stock_cancel:")):
+            _, action, token = data.split(":", 2)
+            pending = self._pending_stock.get(sender_id)
+            approved = self._registry.get_approved(sender_id)
+            if not pending or pending[0] != token or not approved or not approved.get("can_control_home"):
                 await self._api.async_answer_callback(callback_id, "Черновик больше недоступен")
                 return
-            if data == "tar:stock_cancel":
+            _, items = self._pending_stock.pop(sender_id)
+            if action == "stock_cancel":
                 await self._api.async_answer_callback(callback_id, "Отменено")
                 return
             try: added, removed = await self._add_stock(items)
