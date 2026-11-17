@@ -16,6 +16,9 @@ from zoneinfo import ZoneInfo
 from .registry import MAX_NEWS_PROMPT_LENGTH
 
 KYIV = ZoneInfo("Europe/Kyiv")
+NEWS_CONFIG = "telegram_access_registrar_news_config"
+NEWS_SCHEDULE = "news_schedule"
+DEFAULT_NEWS_TIME = "08:30"
 _LOGGER = logging.getLogger(__name__)
 _MAX_FEED_BYTES = 2_000_000
 _MAX_VOICE_BYTES = 5_000_000
@@ -70,12 +73,17 @@ class Article:
     text: str
 
 
-def next_bulletin(now: datetime) -> datetime:
+def news_settings(hass, entry) -> dict:
+    return {**hass.data[NEWS_CONFIG], **entry.options.get(NEWS_SCHEDULE, {})}
+
+
+def next_bulletin(now: datetime, send_at: str = DEFAULT_NEWS_TIME) -> datetime:
+    wall_time = time.fromisoformat(send_at)
     local = now.astimezone(KYIV)
-    due = datetime.combine(local.date(), time(8, 30), KYIV)
-    if local >= due:
-        due = datetime.combine(local.date() + timedelta(days=1), time(8, 30), KYIV)
-    return due.astimezone(UTC)
+    due = datetime.combine(local.date(), wall_time, KYIV).astimezone(UTC)
+    if now >= due:
+        due = datetime.combine(local.date() + timedelta(days=1), wall_time, KYIV).astimezone(UTC)
+    return due
 
 
 def _timestamp(value: str) -> datetime | None:
@@ -514,7 +522,7 @@ class NewsBulletin:
             return
         if subscribed:
             schedule = (
-                "Буду присылать сводку в 08:30 по Киеву."
+                f"Буду присылать сводку в {self.config.get('time', DEFAULT_NEWS_TIME)} по Киеву."
                 if self.config["enabled"]
                 else "Расписание пока выключено в Home Assistant."
             )

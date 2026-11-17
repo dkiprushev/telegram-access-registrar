@@ -10,13 +10,19 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig, TextSelector, TextSelectorConfig
+from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
+    TextSelector,
+    TextSelectorConfig,
+    TimeSelector,
+)
 from homeassistant.util import dt as dt_util
 
 from . import request_log
 from .api import TelegramApi, TelegramApiError
 from .const import CONF_ADMIN_CHAT_ID, CONF_BOT_TOKEN, DOMAIN
-from .news import DEFAULT_NEWS_PROMPT
+from .news import DEFAULT_NEWS_PROMPT, NEWS_SCHEDULE, news_settings
 from .registry import MAX_NEWS_PROMPT_LENGTH
 
 
@@ -101,13 +107,31 @@ class RegistrarOptionsFlow(config_entries.OptionsFlow):
                 "administrator": self.async_step_administrator,
                 "users": self.async_step_users,
                 "news": self.async_step_news,
+                "news_schedule": self.async_step_news_schedule,
             }[user_input["section"]]()
         return self.async_show_form(
             step_id="init",
             data_schema=probatio.Schema({
                 probatio.Required("section"): SelectSelector(SelectSelectorConfig(
-                    options=["journal", "administrator", "users", "news"], translation_key="options_section",
+                    options=["journal", "administrator", "users", "news", "news_schedule"],
+                    translation_key="options_section",
                 )),
+            }),
+        )
+
+    async def async_step_news_schedule(self, user_input=None):
+        entry = self.config_entry
+        if user_input is not None:
+            return self.async_create_entry(title="", data={
+                **entry.options,
+                NEWS_SCHEDULE: {"enabled": user_input["enabled"], "time": user_input["time"][:5]},
+            })
+        settings = news_settings(self.hass, entry)
+        return self.async_show_form(
+            step_id="news_schedule",
+            data_schema=probatio.Schema({
+                probatio.Required("enabled", default=settings["enabled"]): bool,
+                probatio.Required("time", default=settings["time"] + ":00"): TimeSelector(),
             }),
         )
 

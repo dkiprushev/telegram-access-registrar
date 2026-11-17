@@ -60,6 +60,14 @@
         "data": {
           "prompt": "News prompt"
         }
+      },
+      "news_schedule": {
+        "title": "News schedule",
+        "description": "Time zone: Kyiv (Europe/Kyiv).",
+        "data": {
+          "enabled": "Daily delivery",
+          "time": "Delivery time"
+        }
       }
     },
     "abort": {
@@ -85,7 +93,8 @@
         "journal": "Request log",
         "administrator": "Administrator",
         "users": "Users",
-        "news": "News subscribers"
+        "news": "News subscribers",
+        "news_schedule": "News schedule"
       }
     },
     "user_action": {

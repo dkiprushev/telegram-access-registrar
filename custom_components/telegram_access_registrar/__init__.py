@@ -35,13 +35,13 @@ from .const import (
 )
 from .coordinator import RegistrarCoordinator
 from .inventory import InventoryAssistant
-from .news import NewsBulletin, next_bulletin
+from .news import DEFAULT_NEWS_TIME, NEWS_CONFIG, NewsBulletin, news_settings, next_bulletin
 from .registry import AccessRegistry
 
-NEWS_CONFIG = "telegram_access_registrar_news_config"
 NEWS_SERVICE = "news_now"
 _NEWS_SCHEMA = vol.Schema({
     vol.Optional("enabled", default=False): bool,
+    vol.Optional("time", default=DEFAULT_NEWS_TIME): vol.Match(r"^(?:[01]\d|2[0-3]):[0-5]\d$"),
     vol.Optional("ai_task", default="ai_task.codex_assist_ai_task"): str,
     # Accept existing YAML from releases with separate news TTS settings.
     vol.Optional("tts"): dict,
@@ -84,7 +84,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     inventory = InventoryAssistant(hass)
     assist = TelegramAssist(hass, api, inventory)
-    news_config = hass.data[NEWS_CONFIG]
+    news_config = news_settings(hass, entry)
     bulletin = NewsBulletin(hass, session, api, int(entry.data[CONF_ADMIN_CHAT_ID]), news_config)
     log_path = request_log.storage_path(hass.config, entry.entry_id)
 
@@ -110,16 +110,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_start()
     await registry.async_ensure_admin(int(entry.data[CONF_ADMIN_CHAT_ID]))
     cancel_news = None
+    news_due = None
     news_stopped = False
 
-    async def scheduled_news(_now: datetime) -> None:
+    def schedule_news() -> None:
+        nonlocal cancel_news, news_due
+        if cancel_news is not None:
+            cancel_news()
+        cancel_news = None
+        news_due = None
+        if not news_stopped and bulletin.config["enabled"]:
+            news_due = next_bulletin(datetime.now(UTC), bulletin.config["time"])
+            cancel_news = async_track_point_in_utc_time(hass, scheduled_news, news_due)
+
+    async def scheduled_news(due: datetime) -> None:
         nonlocal cancel_news
-        if news_stopped:
+        if news_stopped or due != news_due:
             return
-        cancel_news = async_track_point_in_utc_time(hass, scheduled_news, next_bulletin(datetime.now(UTC)))
+        cancel_news = None
+        schedule_news()
         await bulletin.run(
             deliver=True, scheduled=True, recipients=registry.news_subscribers, prompt_for=registry.news_prompt,
         )
+
+    async def update_news_schedule(_hass, updated_entry) -> None:
+        updated = news_settings(hass, updated_entry)
+        if updated != bulletin.config:
+            bulletin.config = updated
+            schedule_news()
 
     def stop_news() -> None:
         nonlocal news_stopped
@@ -128,8 +146,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if cancel_news is not None:
             cancel_news()
 
-    if news_config["enabled"]:
-        cancel_news = async_track_point_in_utc_time(hass, scheduled_news, next_bulletin(datetime.now(UTC)))
+    schedule_news()
+    entry.async_on_unload(entry.add_update_listener(update_news_schedule))
     entry.async_on_unload(stop_news)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "registry": registry,

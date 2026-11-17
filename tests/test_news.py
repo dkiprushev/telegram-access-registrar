@@ -422,3 +422,14 @@ async def test_ffmpeg_uses_explicit_ogg_opus_encoder(monkeypatch):
     process.returncode = 1
     with pytest.raises(news.SpeechError, match="FFmpeg не смог преобразовать"):
         await news._encode_opus(object(), b"bad audio")
+
+
+def test_custom_schedule_uses_kyiv_wall_clock_and_ui_overrides_yaml():
+    hass = SimpleNamespace(data={
+        news.NEWS_CONFIG: {"time": "08:30", "enabled": True, "ai_task": "ai_task.test"},
+    })
+    entry = SimpleNamespace(options={news.NEWS_SCHEDULE: {"time": "07:15", "enabled": False}})
+
+    assert news.news_settings(hass, entry) == {"time": "07:15", "enabled": False, "ai_task": "ai_task.test"}
+    before_dst = datetime(2026, 3, 28, 7, 0, tzinfo=UTC)
+    assert news.next_bulletin(before_dst, "07:15") == datetime(2026, 3, 29, 4, 15, tzinfo=UTC)
