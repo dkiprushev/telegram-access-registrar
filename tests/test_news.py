@@ -333,10 +333,7 @@ async def test_home_assistant_tts_uses_assist_voice_and_validates_opus(monkeypat
     get_pipeline.assert_called_once_with(hass)
     tts.async_create_stream.assert_called_once_with(
         hass, "tts.piper", language="ru_RU",
-        options={
-            "preferred_format": "opus", "preferred_sample_rate": 48000,
-            "preferred_sample_channels": 1, "voice": "ru_RU-irina-medium",
-        },
+        options={"voice": "ru_RU-irina-medium"},
     )
     stream.async_set_message.assert_called_once_with("Новости.")
 
@@ -346,6 +343,16 @@ async def test_home_assistant_tts_uses_assist_voice_and_validates_opus(monkeypat
     await news.synthesize_with_home_assistant(hass, "Следующий выпуск.")
     assert tts.async_create_stream.call_args.args == (hass, "tts.other")
     assert tts.async_create_stream.call_args.kwargs["options"]["voice"] == "new_voice"
+
+    async def native_audio():
+        yield b"RIFF first chunk"
+        yield b"second chunk"
+
+    stream.async_stream_result = native_audio
+    encode = AsyncMock(return_value=(VOICE, 60))
+    monkeypatch.setattr(news, "_encode_opus", encode)
+    assert await news.synthesize_with_home_assistant(hass, "Новости.") == (VOICE, 60)
+    encode.assert_awaited_once_with(hass, b"RIFF first chunksecond chunk")
 
     get_pipeline.return_value.tts_engine = None
     with pytest.raises(news.SpeechError, match="не выбран синтезатор"):
@@ -394,3 +401,24 @@ async def test_script_retries_service_validation_as_plain_json_text():
     )
     assert "structure" in call.await_args_list[0].args[2]
     assert "structure" not in call.await_args_list[1].args[2]
+
+
+async def test_ffmpeg_uses_explicit_ogg_opus_encoder(monkeypatch):
+    import sys
+
+    process = SimpleNamespace(returncode=0, communicate=AsyncMock(return_value=(VOICE, None)))
+    spawn = AsyncMock(return_value=process)
+    ffmpeg = SimpleNamespace(get_ffmpeg_manager=lambda hass: SimpleNamespace(binary="/usr/bin/ffmpeg"))
+    monkeypatch.setitem(sys.modules, "homeassistant.components", SimpleNamespace(ffmpeg=ffmpeg))
+    monkeypatch.setattr(news.asyncio, "create_subprocess_exec", spawn)
+
+    assert await news._encode_opus(object(), b"fixture audio") == (VOICE, 60)
+    args = spawn.await_args.args
+    assert args[0] == "/usr/bin/ffmpeg"
+    assert args[args.index("-c:a") + 1] == "libopus"
+    assert args[-3:] == ("-f", "ogg", "pipe:1")
+    process.communicate.assert_awaited_once_with(b"fixture audio")
+
+    process.returncode = 1
+    with pytest.raises(news.SpeechError, match="FFmpeg не смог преобразовать"):
+        await news._encode_opus(object(), b"bad audio")

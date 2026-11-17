@@ -19,6 +19,7 @@ KYIV = ZoneInfo("Europe/Kyiv")
 _LOGGER = logging.getLogger(__name__)
 _MAX_FEED_BYTES = 2_000_000
 _MAX_VOICE_BYTES = 5_000_000
+_MAX_TTS_BYTES = 16_000_000
 _MAX_MATERIAL_BYTES = 14_000
 _MAX_MATERIALS_PER_SOURCE = 6
 
@@ -416,9 +417,7 @@ async def synthesize_with_home_assistant(hass, script: str) -> tuple[bytes, floa
     if not engine:
         raise SpeechError("В профиле Assist не выбран синтезатор речи.")
 
-    options = {"preferred_format": "opus", "preferred_sample_rate": 48000, "preferred_sample_channels": 1}
-    if voice:
-        options["voice"] = voice
+    options = {"voice": voice} if voice else {}
     try:
         async with asyncio.timeout(60):
             stream = tts.async_create_stream(hass, engine, language=language, options=options)
@@ -426,7 +425,7 @@ async def synthesize_with_home_assistant(hass, script: str) -> tuple[bytes, floa
             audio = bytearray()
             async for chunk in stream.async_stream_result():
                 audio.extend(chunk)
-                if len(audio) > _MAX_VOICE_BYTES:
+                if len(audio) > _MAX_TTS_BYTES:
                     raise SpeechError("Озвучка Home Assistant превысила допустимый размер.")
     except SpeechError:
         raise
@@ -435,8 +434,45 @@ async def synthesize_with_home_assistant(hass, script: str) -> tuple[bytes, floa
     voice_bytes = bytes(audio)
     try:
         return voice_bytes, opus_duration(voice_bytes)
-    except ValueError as err:
-        raise SpeechError("Home Assistant не вернул полный поток OGG/Opus.") from err
+    except ValueError:
+        pass
+    if not voice_bytes:
+        raise SpeechError("Синтезатор Home Assistant вернул пустое аудио.")
+    return await _encode_opus(hass, voice_bytes)
+
+
+async def _encode_opus(hass, audio: bytes) -> tuple[bytes, float]:
+    from homeassistant.components import ffmpeg
+
+    process = None
+    try:
+        async with asyncio.timeout(30):
+            process = await asyncio.create_subprocess_exec(
+                ffmpeg.get_ffmpeg_manager(hass).binary,
+                "-nostdin", "-hide_banner", "-loglevel", "error",
+                "-i", "pipe:0", "-map", "0:a:0", "-map_metadata", "-1",
+                "-c:a", "libopus", "-ar", "48000", "-ac", "1", "-b:a", "32k",
+                "-f", "ogg", "pipe:1",
+                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            encoded, _ = await process.communicate(audio)
+        if process.returncode:
+            raise SpeechError(f"FFmpeg не смог преобразовать озвучку в OGG/Opus (код {process.returncode}).")
+        if len(encoded) > _MAX_VOICE_BYTES:
+            raise SpeechError("Голосовое сообщение превысило допустимый размер.")
+        return encoded, opus_duration(encoded)
+    except SpeechError:
+        raise
+    except Exception as err:
+        raise SpeechError(f"Не удалось преобразовать озвучку в OGG/Opus ({type(err).__name__}).") from err
+    finally:
+        if process is not None and process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            await process.wait()
 
 
 class NewsBulletin:
