@@ -47,6 +47,9 @@ class RegistrarCoordinator:
     async def _send_draft(self, chat_id: int, items: list[dict[str, Any]], title: str) -> None:
         token = uuid4().hex
         lines = "\n".join(f"• {item['name']} — {item['amount']:g}, {item['location']}" for item in items)
+        matches = [item["shopping_match"]["name"] for item in items if item.get("shopping_match")]
+        if matches:
+            lines += "\n\nУдалить из списка покупок после добавления:\n" + "\n".join(f"• {name}" for name in matches)
         for start in range(0, len(lines), 1800):
             await self._api.async_send_message(chat_id, f"{title}\n{lines[start:start + 1800]}")
         await self._api.async_send_message(chat_id, "Подтвердить добавление?", [[
