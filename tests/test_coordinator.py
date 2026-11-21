@@ -114,3 +114,46 @@ async def test_news_commands_require_private_chat_and_home_control():
     handler.assert_not_awaited()
     await send("private", "/news")
     handler.assert_awaited_once_with(2, "/news", "")
+
+
+async def test_guest_key_requires_admin_decision_and_duplicate_click_cannot_issue_twice():
+    from unittest.mock import AsyncMock
+
+    api = FakeApi()
+    registry = AccessRegistry(MemoryStore())
+    await registry.async_load()
+    issue = AsyncMock()
+    coordinator = RegistrarCoordinator(api, registry, 1, lambda _: None, issue_requested_key=issue)
+    message = {"chat": {"id": 2, "type": "private"}, "from": {"id": 2}, "text": "дай ключ для входа"}
+    await coordinator.async_handle_update({"message": message})
+    button = api.messages[0][2][0][0]["callback_data"]
+    issue.assert_not_awaited()
+
+    callback = {"id": "cb", "from": {"id": 2}, "message": {"chat": {"id": 1}}, "data": button}
+    await coordinator.async_handle_update({"callback_query": callback})
+    issue.assert_not_awaited()
+    callback["from"]["id"] = 1
+    await coordinator.async_handle_update({"callback_query": callback})
+    await coordinator.async_handle_update({"callback_query": callback})
+    issue.assert_awaited_once()
+    assert issue.await_args.args[0]["chat_id"] == 2
+
+
+async def test_guest_key_denial_does_not_issue_or_grant_home_control():
+    from unittest.mock import AsyncMock
+
+    api = FakeApi()
+    registry = AccessRegistry(MemoryStore())
+    await registry.async_load()
+    issue = AsyncMock()
+    coordinator = RegistrarCoordinator(api, registry, 1, lambda _: None, issue_requested_key=issue)
+    await coordinator.async_handle_update({"message": {
+        "chat": {"id": 2, "type": "private"}, "from": {"id": 2}, "text": "дай пропуск",
+    }})
+    button = api.messages[0][2][0][1]["callback_data"]
+    await coordinator.async_handle_update({"callback_query": {
+        "id": "cb", "from": {"id": 1}, "message": {"chat": {"id": 1}}, "data": button,
+    }})
+    issue.assert_not_awaited()
+    assert registry.get_approved(2) is None
+    assert "отклонил" in api.messages[-1][1]

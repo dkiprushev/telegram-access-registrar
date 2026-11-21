@@ -96,6 +96,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def news_command(chat_id: int, command: str, argument: str) -> None:
         await bulletin.handle_command(registry, chat_id, command, argument)
 
+    async def issue_requested_key(identity: dict) -> None:
+        await hass.services.async_call(
+            DOMAIN, SERVICE_ISSUE_AKUVOX_KEY,
+            {"chat_id": identity["chat_id"], "relay_names": ["Вхід 25-Е", "Ліфт пасажирський 25-Е"],
+             "duration_hours": 48},
+            blocking=True, return_response=True,
+        )
+
     coordinator = RegistrarCoordinator(
         api,
         registry,
@@ -106,6 +114,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         log_request=log_request,
         confirm_change=assist.async_confirm_change,
         news_command=news_command,
+        issue_requested_key=issue_requested_key,
     )
     await coordinator.async_start()
     await registry.async_ensure_admin(int(entry.data[CONF_ADMIN_CHAT_ID]))
@@ -192,8 +201,17 @@ def _async_register_services(hass: HomeAssistant) -> None:
 
     async def issue_akuvox_key(call: ServiceCall) -> dict[str, Any]:
         """Issue an Akuvox key and deliver its PIN plus QR to an approved user."""
+        if call.context.user_id:
+            user = await hass.auth.async_get_user(call.context.user_id)
+            if user is None or not user.is_admin:
+                raise Unauthorized(context=call.context)
+        if not any(key in call.data for key in ("username", "chat_id")):
+            raise ValueError("Specify username or chat_id")
         runtime = _runtime(hass)
-        recipient = runtime["registry"].get_approved_by_username(call.data["username"])
+        if "chat_id" in call.data:
+            recipient = {"chat_id": call.data["chat_id"], "username": str(call.data["chat_id"])}
+        else:
+            recipient = runtime["registry"].get_approved_by_username(call.data["username"])
         if recipient is None:
             raise ValueError("Recipient is not approved")
         coordinators = list(hass.data.get("akuvox", {}).values())
@@ -207,7 +225,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
             raise ValueError("One or more requested Akuvox relays were not found")
         now = dt_util.now().replace(tzinfo=None)
         end = now + timedelta(hours=int(call.data.get("duration_hours", 48)))
-        description = f"Telegram @{call.data['username'].lstrip('@')}"
+        description = f"Telegram {recipient['chat_id']} {dt_util.utcnow().isoformat()}"
         await client.async_create_panel_temp_key(description, now.strftime("%Y-%m-%d %H:%M:%S"), end.strftime("%Y-%m-%d %H:%M:%S"), int(call.data.get("uses", 100)), [{"mac": str(r["mac"]), "relay": str(r["relay_id"])} for r in selected])
         keys = client.get_panel_data().get("temporary_keys", [])
         key = next((item for item in reversed(keys) if item.get("description") == description), None)
@@ -264,7 +282,7 @@ def _async_register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, SERVICE_REJECT, reject, vol.Schema({vol.Required("chat_id"): vol.Coerce(int)}), supports_response="optional")
     hass.services.async_register(DOMAIN, SERVICE_LIST_REQUESTS, list_requests, supports_response="only")
     hass.services.async_register(DOMAIN, SERVICE_SEND_MESSAGE, send_message, vol.Schema({vol.Required("username"): str, vol.Required("message"): str}))
-    hass.services.async_register(DOMAIN, SERVICE_ISSUE_AKUVOX_KEY, issue_akuvox_key, vol.Schema({vol.Required("username"): str, vol.Required("relay_names"): [str], vol.Optional("duration_hours", default=48): vol.All(vol.Coerce(int), vol.Range(min=1, max=168)), vol.Optional("uses", default=100): vol.All(vol.Coerce(int), vol.Range(min=1, max=100000))}), supports_response="only")
+    hass.services.async_register(DOMAIN, SERVICE_ISSUE_AKUVOX_KEY, issue_akuvox_key, vol.Schema({vol.Exclusive("username", "recipient"): str, vol.Exclusive("chat_id", "recipient"): vol.Coerce(int), vol.Required("relay_names"): [str], vol.Optional("duration_hours", default=48): vol.All(vol.Coerce(int), vol.Range(min=1, max=168)), vol.Optional("uses", default=100): vol.All(vol.Coerce(int), vol.Range(min=1, max=100000))}), supports_response="only")
     hass.services.async_register(DOMAIN, SERVICE_SET_HOME_CONTROL, set_home_control, vol.Schema({vol.Required("chat_id"): vol.Coerce(int), vol.Required("allowed"): bool}), supports_response="optional")
     hass.services.async_register(DOMAIN, SERVICE_SET_ADMIN_CHAT_ID, set_admin_chat_id, vol.Schema({vol.Required("chat_id"): vol.Coerce(int)}))
 

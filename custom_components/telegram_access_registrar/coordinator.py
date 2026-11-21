@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from uuid import uuid4
 from typing import Any, Awaitable, Callable
 
@@ -26,6 +27,7 @@ class RegistrarCoordinator:
         assist_reply: Callable[..., Awaitable[bool]] | None = None,
         log_request: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         confirm_change: Callable[[int, str, str, str], Awaitable[None]] | None = None,
+        issue_requested_key: Callable[[dict], Awaitable[None]] | None = None,
         news_command: Callable[[int, str, str], Awaitable[None]] | None = None,
     ) -> None:
         self._api = api
@@ -37,6 +39,7 @@ class RegistrarCoordinator:
         self._log_request = log_request
         self._confirm_change = confirm_change
         self._news_command = news_command
+        self._issue_requested_key = issue_requested_key
         self._pending_stock: dict[int, tuple[str, list[dict[str, Any]]]] = {}
         self._offset: int | None = None
         self._task: asyncio.Task[None] | None = None
@@ -135,6 +138,27 @@ class RegistrarCoordinator:
         if command == COMMAND_ACCESS and user.get("id") == self._admin_chat_id:
             await self._async_request_access(argument)
             return
+        text = str(message.get("text", "")).casefold()
+        access_request = command == COMMAND_ACCESS or (
+            re.search(r"ключ|пропуск|доступ|пуст[иі]|впусти", text)
+            and re.search(r"дай|выдай|можно|нужен|нужно|нужна|хочу|прошу|получ|пуст|вход|подъезд|квартир", text)
+        )
+        if private_user and chat_id != self._admin_chat_id and access_request:
+            token, created = await self._registry.async_request_key(chat, user)
+            if created:
+                name = user.get("first_name") or "Пользователь"
+                handle = f" @{user['username']}" if user.get("username") else ""
+                await self._api.async_send_message(
+                    self._admin_chat_id,
+                    f"Запрос временного ключа на 48 часов: {name}{handle}, ID {chat_id}.\n"
+                    f"Вход и пассажирский лифт.\nСообщение: {text[:1000]}",
+                    [[
+                        {"text": "Разрешить", "callback_data": f"tar:key_allow:{token}"},
+                        {"text": "Запретить", "callback_data": f"tar:key_deny:{token}"},
+                    ]],
+                )
+            await self._api.async_send_message(chat_id, "Запрос ключа ожидает решения администратора.")
+            return
         photos = message.get("photo")
         if private_user and approved and approved.get("can_control_home") and (message.get("text") or photos):
             text = argument if command == "/assist" else str(message.get("text") or message.get("caption") or "")
@@ -212,6 +236,34 @@ class RegistrarCoordinator:
         if not isinstance(sender, dict) or not isinstance(callback_id, str):
             return
         sender_id = int(sender.get("id", 0))
+        if isinstance(data, str) and data.startswith(("tar:key_allow:", "tar:key_deny:")):
+            chat = (callback.get("message") or {}).get("chat", {})
+            if sender_id != self._admin_chat_id or chat.get("id") != self._admin_chat_id:
+                await self._api.async_answer_callback(callback_id, "Решение доступно администратору.")
+                return
+            _, action, token = data.split(":", 2)
+            allowed = action == "key_allow"
+            if allowed and self._issue_requested_key is None:
+                await self._api.async_answer_callback(callback_id, "Выдача ключей не настроена.")
+                return
+            identity = await self._registry.async_decide_key(token, allowed)
+            if identity is None:
+                await self._api.async_answer_callback(callback_id, "Заявка уже обработана.")
+                return
+            await self._api.async_answer_callback(callback_id, "Разрешено" if allowed else "Запрещено")
+            if not allowed:
+                await self._api.async_send_message(identity["chat_id"], "Администратор отклонил запрос ключа.")
+                return
+            try:
+                await self._issue_requested_key(identity)
+            except Exception as err:
+                _LOGGER.warning("Approved guest key failed (%s)", type(err).__name__)
+                await self._api.async_send_message(
+                    self._admin_chat_id,
+                    "Ошибка выдачи или доставки ключа. Проверь ключи Akuvox перед повторной выдачей.",
+                )
+                await self._api.async_send_message(identity["chat_id"], "Не удалось выдать или доставить ключ. Администратор уведомлён.")
+            return
         if isinstance(data, str) and data.startswith(("tar:edit_apply:", "tar:edit_cancel:")):
             chat = (callback.get("message") or {}).get("chat", {})
             approved = self._registry.get_approved(sender_id)

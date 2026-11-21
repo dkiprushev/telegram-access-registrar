@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from uuid import uuid4
 from typing import Any, Protocol
 
 MAX_NEWS_PROMPT_LENGTH = 3000
@@ -157,6 +158,24 @@ class AccessRegistry:
             return False
         await self._save()
         return True
+
+    async def async_request_key(self, chat, user):
+        requests = self._data.setdefault("key_requests", {})
+        for token, request in requests.items():
+            if request["identity"]["chat_id"] == chat["id"] and request["status"] == "pending":
+                return token, False
+        token = uuid4().hex
+        requests[token] = {"identity": self._identity(chat, user), "status": "pending"}
+        await self._save()
+        return token, True
+
+    async def async_decide_key(self, token, allowed):
+        request = self._data.setdefault("key_requests", {}).get(token)
+        if request is None or request["status"] != "pending":
+            return None
+        request["status"] = "issuing" if allowed else "denied"
+        await self._save()
+        return deepcopy(request["identity"])
 
     def snapshot(self) -> dict[str, list[dict[str, Any]]]:
         return {
