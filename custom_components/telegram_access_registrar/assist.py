@@ -225,6 +225,19 @@ class TelegramAssist:
         if not question and not photo_id:
             await self.api.async_send_message(chat_id, "Напиши запрос после /assist.")
             return True
+        # Explicit purchase captions do not need a conversational clarification.
+        purchase_caption = question.strip().casefold().rstrip(".! ") in {
+            "купил", "купила", "купили", "это куплено", "я купил", "я купила",
+        }
+        current_photo = photo_id or self.pending_photos.get(chat_id)
+        if purchase_caption and current_photo and (photo_id or not pending_items):
+            self.pending_photos[chat_id] = current_photo
+            raw, _ = await self.api.async_download_file(current_photo)
+            items, _ = await self.inventory.async_propose_photo_purchase(raw, question)
+            if not items:
+                raise HomeAssistantError("Не удалось распознать товары на фото")
+            await show_draft(items, "Черновик покупки для Grocy")
+            return True
         agent_id = "conversation.smarthouse_telegram"
         state = self.hass.states.get(agent_id)
         if state is None or state.state == "unavailable":
